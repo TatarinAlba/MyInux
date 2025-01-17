@@ -194,6 +194,12 @@ struct tcp_sock {
 	 * Documentation/networking/net_cachelines/tcp_sock.rst.
 	 * Please update the document when adding new fields.
 	 */
+	
+	u32 iat_min;
+	u32 iat_current;
+	u32 delayed_segments;
+	u32 max_delayed_segments;
+	u32 max_delayed_timeout;
 
 	/* inet_connection_sock has to be the first member of tcp_sock */
 	struct inet_connection_sock	inet_conn;

@@ -425,6 +425,12 @@ void tcp_init_sock(struct sock *sk)
 	struct tcp_sock *tp = tcp_sk(sk);
 	int rto_min_us;
 
+	tp->max_delayed_timeout = HZ * 2;
+	tp->max_delayed_segments = 2;
+	tp->delayed_segments = 0;
+	tp->iat_current = UINT_MAX;
+	tp->iat_min = UINT_MAX;
+
 	tp->out_of_order_queue = RB_ROOT;
 	sk->tcp_rtx_queue = RB_ROOT;
 	tcp_init_xmit_timers(sk);
