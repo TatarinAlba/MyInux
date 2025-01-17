@@ -5772,6 +5772,7 @@ static void __tcp_ack_snd_check(struct sock *sk, int ofo_possible)
 			return;
 		}
 send_now:
+		tp->delayed_segments = 0;
 		tcp_send_ack(sk);
 		return;
 	}

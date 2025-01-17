@@ -4173,38 +4173,29 @@ u32 tcp_delack_max(const struct sock *sk)
 }
 
 /* Send out a delayed ack, the caller does the policy checking
- * to see if we should even be here.  See tcp_input.c:tcp_ack_snd_check()
+ * to see if we should even be here.  See tsend_delaycp_input.c:tcp_ack_snd_check()
  * for details.
  */
 void tcp_send_delayed_ack(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
+	struct tcp_sock *tp = tcp_sk(sk);
 	int ato = icsk->icsk_ack.ato;
 	unsigned long timeout;
 
-	if (ato > TCP_DELACK_MIN) {
-		const struct tcp_sock *tp = tcp_sk(sk);
-		int max_ato = HZ / 2;
+	u32 now = jiffies;
+	u32 iat = now - tp->last_packet_time;
 
-		if (inet_csk_in_pingpong_mode(sk) ||
-		    (icsk->icsk_ack.pending & ICSK_ACK_PUSHED))
-			max_ato = TCP_DELACK_MAX;
+	if (iat < tp->iat_min || tp->iat_min == 0) {
+		tp->iat_min = iat;
+	}
+	tp->iat_current = iat;
 
-		/* Slow path, intersegment interval is "high". */
+	tp->last_packet_time = now();
 
-		/* If some rtt estimate is known, use it to bound delayed ack.
-		 * Do not use inet_csk(sk)->icsk_rto here, use results of rtt measurements
-		 * directly.
-		 */
-		if (tp->srtt_us) {
-			int rtt = max_t(int, usecs_to_jiffies(tp->srtt_us >> 3),
-					TCP_DELACK_MIN);
-
-			if (rtt < max_ato)
-				max_ato = rtt;
-		}
-
-		ato = min(ato, max_ato);
+	if (tp->iat_min && tp->iat_current) {
+		u32 tcp_aad_timeout = (tp->iat_min * 75 + tp->iat_current * 25) * 3 / 200;
+		ato = min_t(u32, ato, tcp_aad_timeout);
 	}
 
 	ato = min_t(u32, ato, tcp_delack_max(sk));
@@ -4216,6 +4207,7 @@ void tcp_send_delayed_ack(struct sock *sk)
 	if (icsk->icsk_ack.pending & ICSK_ACK_TIMER) {
 		/* If delack timer is about to expire, send ACK now. */
 		if (time_before_eq(icsk->icsk_ack.timeout, jiffies + (ato >> 2))) {
+			tp->delayed_segments = 0;
 			tcp_send_ack(sk);
 			return;
 		}
