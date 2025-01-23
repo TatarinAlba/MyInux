@@ -430,6 +430,7 @@ void tcp_init_sock(struct sock *sk)
 	tp->delayed_segments = 0;
 	tp->iat_current = UINT_MAX;
 	tp->iat_min = UINT_MAX;
+	tp->last_packet_time = 0;
 
 	tp->out_of_order_queue = RB_ROOT;
 	sk->tcp_rtx_queue = RB_ROOT;

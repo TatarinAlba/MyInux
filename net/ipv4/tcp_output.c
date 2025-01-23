@@ -4191,7 +4191,7 @@ void tcp_send_delayed_ack(struct sock *sk)
 	}
 	tp->iat_current = iat;
 
-	tp->last_packet_time = now();
+	tp->last_packet_time = now;
 
 	if (tp->iat_min && tp->iat_current) {
 		u32 tcp_aad_timeout = (tp->iat_min * 75 + tp->iat_current * 25) * 3 / 200;
