@@ -255,6 +255,7 @@
 #include <linux/skbuff.h>
 #include <linux/scatterlist.h>
 #include <linux/splice.h>
+#include <linux/jiffies.h> // For msecs_to_jiffies()
 #include <linux/net.h>
 #include <linux/socket.h>
 #include <linux/random.h>
@@ -425,7 +426,7 @@ void tcp_init_sock(struct sock *sk)
 	struct tcp_sock *tp = tcp_sk(sk);
 	int rto_min_us;
 
-	tp->max_delayed_timeout = HZ * 2;
+	tp->max_delayed_timeout = msecs_to_jiffies(500);
 	tp->max_delayed_segments = 2;
 	tp->delayed_segments = 0;
 	tp->iat_current = UINT_MAX;

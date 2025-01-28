@@ -4190,30 +4190,30 @@ void tcp_send_delayed_ack(struct sock *sk)
 		tp->iat_min = iat;
 	}
 	tp->iat_current = iat;
-
+	tp->delayed_segments++;
 	tp->last_packet_time = now;
 
-	if (tp->iat_min && tp->iat_current) {
-		u32 tcp_aad_timeout = (tp->iat_min * 75 + tp->iat_current * 25) * 3 / 200;
-		ato = min_t(u32, ato, tcp_aad_timeout);
+	u32 tcp_aad_timeout = 0;
+	if (tp->delayed_segments < 2) {
+		ato = tp->max_delayed_timeout;
+	}
+	else {
+		tcp_aad_timeout = (tp->iat_min * 75 + tp->iat_current * 25) * 3 / 200;
+		ato = min_t(u32, ato, tp->max_delayed_timeout);
 	}
 
-	ato = min_t(u32, ato, tcp_delack_max(sk));
-
 	/* Stay within the limit we were given */
-	timeout = jiffies + ato;
+	timeout = now + ato;
 
 	/* Use new timeout only if there wasn't a older one earlier. */
 	if (icsk->icsk_ack.pending & ICSK_ACK_TIMER) {
 		/* If delack timer is about to expire, send ACK now. */
-		if (time_before_eq(icsk->icsk_ack.timeout, jiffies + (ato >> 2))) {
+		if (time_before_eq(icsk->icsk_ack.timeout, now + (ato >> 2))) {
 			tp->delayed_segments = 0;
 			tcp_send_ack(sk);
 			return;
 		}
 
-		if (!time_before(timeout, icsk->icsk_ack.timeout))
-			timeout = icsk->icsk_ack.timeout;
 	}
 	icsk->icsk_ack.pending |= ICSK_ACK_SCHED | ICSK_ACK_TIMER;
 	icsk->icsk_ack.timeout = timeout;
