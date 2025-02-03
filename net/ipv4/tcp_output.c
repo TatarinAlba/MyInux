@@ -4199,7 +4199,7 @@ void tcp_send_delayed_ack(struct sock *sk)
 	}
 	else {
 		tcp_aad_timeout = (tp->iat_min * 75 + tp->iat_current * 25) * 3 / 200;
-		ato = min_t(u32, ato, tp->max_delayed_timeout);
+		ato = min_t(u32, tcp_aad_timeout, tp->max_delayed_timeout);
 	}
 
 	/* Stay within the limit we were given */
