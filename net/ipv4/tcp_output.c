@@ -4206,14 +4206,14 @@ void tcp_send_delayed_ack(struct sock *sk)
 	timeout = now + ato;
 
 //	/* Use new timeout only if there wasn't a older one earlier. */
-//	if (icsk->icsk_ack.pending & ICSK_ACK_TIMER) {
-//		/* If delack timer is about to expire, send ACK now. */
-//		if (time_before_eq(icsk->icsk_ack.timeout, now + (ato >> 2))) {
-//			tp->delayed_segments = 0;
-//			tcp_send_ack(sk);
-//			return;
-//		}
-//	}
+	if (icsk->icsk_ack.pending & ICSK_ACK_TIMER) {
+		/* If delack timer is about to expire, send ACK now. */
+		if (time_before_eq(icsk->icsk_ack.timeout, now + (ato >> 2))) {
+			tp->delayed_segments = 0;
+			tcp_send_ack(sk);
+			return;
+		}
+	}
 	
 	icsk->icsk_ack.pending |= ICSK_ACK_SCHED | ICSK_ACK_TIMER;
 	icsk->icsk_ack.timeout = timeout;
