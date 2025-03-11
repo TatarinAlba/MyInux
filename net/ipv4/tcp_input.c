@@ -71,6 +71,7 @@
 #include <linux/kernel.h>
 #include <linux/prefetch.h>
 #include <net/dst.h>
+#include <linux/ktime.h>
 #include <net/tcp.h>
 #include <net/proto_memory.h>
 #include <net/inet_common.h>
@@ -5749,6 +5750,19 @@ static void __tcp_ack_snd_check(struct sock *sk, int ofo_possible)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	unsigned long rtt, delay;
+
+	u64 now = ktime_get_ns();
+	u64 iat = now - tp->last_packet_time;
+	pr_info("[TCP-AAD] ******************************");
+	pr_info("[TCP-AAD] Entering tcp_send_ack: iat = %llu\n", iat);
+	if (iat > 5000) {
+		if (iat < tp->iat_min) {
+			tp->iat_min = iat;
+		}
+		tp->iat_current = iat;
+	}
+	tp->last_packet_time = now;
+	tp->delayed_segments++;
 
 	    /* More than one full frame received... */
 	if (((tp->rcv_nxt - tp->rcv_wup) > inet_csk(sk)->icsk_ack.rcv_mss &&

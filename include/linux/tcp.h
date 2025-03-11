@@ -503,12 +503,12 @@ struct tcp_sock {
 	struct saved_syn *saved_syn;
 
 /* TCP-AAD related information */
-	u32 iat_min;
-	u32 iat_current;
+	u64 iat_min;
+	u64 iat_current;
 	u32 delayed_segments;
-	u32 max_delayed_segments;
-	u32 max_delayed_timeout;
-	u32 last_packet_time;
+	u64 max_delayed_segments;
+	u64 max_delayed_timeout;
+	u64 last_packet_time;
 };
 
 enum tsq_enum {

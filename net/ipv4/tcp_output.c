@@ -40,7 +40,9 @@
 #include <net/tcp.h>
 #include <net/mptcp.h>
 #include <net/proto_memory.h>
-
+#include <linux/printk.h>  // Required for pr_info
+#include <linux/jiffies.h>
+#include <linux/time.h>
 #include <linux/compiler.h>
 #include <linux/gfp.h>
 #include <linux/module.h>
@@ -4180,40 +4182,23 @@ void tcp_send_delayed_ack(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
-	int ato = icsk->icsk_ack.ato;
+	u64 ato;
 	unsigned long timeout;
+	
+	pr_info("[TCP-AAD] IAT_MIN = %llu\n", tp->iat_min);
+	pr_info("[TCP-AAD] Delayed segments num: delayed_segments = %d\n", tp->delayed_segments);
 
-	u32 now = jiffies;
-	u32 iat = now - tp->last_packet_time;
-
-	if (iat < tp->iat_min || tp->iat_min == 0) {
-		tp->iat_min = iat;
-	}
-	tp->iat_current = iat;
-	tp->delayed_segments++;
-	tp->last_packet_time = now;
-
-	u32 tcp_aad_timeout = 0;
 	if (tp->delayed_segments < 2) {
 		ato = tp->max_delayed_timeout;
 	}
 	else {
-		tcp_aad_timeout = (tp->iat_min * 75 + tp->iat_current * 25) * 3 / 200;
-		ato = min_t(u32, tcp_aad_timeout, tp->max_delayed_timeout);
+		ato = (tp->iat_min * 75 + tp->iat_current * 25) * 3 / 200;
+		ato = min_t(u64, ato, tp->max_delayed_timeout);
 	}
 
 	/* Stay within the limit we were given */
-	timeout = now + ato;
-
-//	/* Use new timeout only if there wasn't a older one earlier. */
-	if (icsk->icsk_ack.pending & ICSK_ACK_TIMER) {
-		/* If delack timer is about to expire, send ACK now. */
-		if (time_before_eq(icsk->icsk_ack.timeout, now + (ato >> 2))) {
-			tp->delayed_segments = 0;
-			tcp_send_ack(sk);
-			return;
-		}
-	}
+	pr_info("[TCP-AAD] Scheduling delayed ACK: timeout in %llu jiffies\n", ato);
+	timeout = jiffies + nsecs_to_jiffies(ato);
 	
 	icsk->icsk_ack.pending |= ICSK_ACK_SCHED | ICSK_ACK_TIMER;
 	icsk->icsk_ack.timeout = timeout;

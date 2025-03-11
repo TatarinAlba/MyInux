@@ -362,6 +362,7 @@ static void tcp_delack_timer(struct timer_list *t)
 	struct sock *sk = &icsk->icsk_inet.sk;
 	struct tcp_sock *tp = tcp_sk(sk);
 
+	pr_info("[TCP-AAD] STOP THE TIMER BRO\n");
 	tp->delayed_segments = 0;
 	
 	bh_lock_sock(sk);
