@@ -40,7 +40,9 @@
 #include <net/tcp.h>
 #include <net/mptcp.h>
 #include <net/proto_memory.h>
-
+#include <linux/printk.h>  // Required for pr_info
+#include <linux/jiffies.h>
+#include <linux/time.h>
 #include <linux/compiler.h>
 #include <linux/gfp.h>
 #include <linux/module.h>
@@ -4173,56 +4175,31 @@ u32 tcp_delack_max(const struct sock *sk)
 }
 
 /* Send out a delayed ack, the caller does the policy checking
- * to see if we should even be here.  See tcp_input.c:tcp_ack_snd_check()
+ * to see if we should even be here.  See tsend_delaycp_input.c:tcp_ack_snd_check()
  * for details.
  */
 void tcp_send_delayed_ack(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
-	int ato = icsk->icsk_ack.ato;
+	struct tcp_sock *tp = tcp_sk(sk);
+	u64 ato;
 	unsigned long timeout;
+	
+	pr_info("[TCP-AAD] IAT_MIN = %llu\n", tp->iat_min);
+	pr_info("[TCP-AAD] Delayed segments num: delayed_segments = %d\n", tp->delayed_segments);
 
-	if (ato > TCP_DELACK_MIN) {
-		const struct tcp_sock *tp = tcp_sk(sk);
-		int max_ato = HZ / 2;
-
-		if (inet_csk_in_pingpong_mode(sk) ||
-		    (icsk->icsk_ack.pending & ICSK_ACK_PUSHED))
-			max_ato = TCP_DELACK_MAX;
-
-		/* Slow path, intersegment interval is "high". */
-
-		/* If some rtt estimate is known, use it to bound delayed ack.
-		 * Do not use inet_csk(sk)->icsk_rto here, use results of rtt measurements
-		 * directly.
-		 */
-		if (tp->srtt_us) {
-			int rtt = max_t(int, usecs_to_jiffies(tp->srtt_us >> 3),
-					TCP_DELACK_MIN);
-
-			if (rtt < max_ato)
-				max_ato = rtt;
-		}
-
-		ato = min(ato, max_ato);
+	if (tp->delayed_segments < 2) {
+		ato = tp->max_delayed_timeout;
 	}
-
-	ato = min_t(u32, ato, tcp_delack_max(sk));
+	else {
+		ato = (tp->iat_min * 75 + tp->iat_current * 25) * 3 / 200;
+		ato = min_t(u64, ato, tp->max_delayed_timeout);
+	}
 
 	/* Stay within the limit we were given */
-	timeout = jiffies + ato;
-
-	/* Use new timeout only if there wasn't a older one earlier. */
-	if (icsk->icsk_ack.pending & ICSK_ACK_TIMER) {
-		/* If delack timer is about to expire, send ACK now. */
-		if (time_before_eq(icsk->icsk_ack.timeout, jiffies + (ato >> 2))) {
-			tcp_send_ack(sk);
-			return;
-		}
-
-		if (!time_before(timeout, icsk->icsk_ack.timeout))
-			timeout = icsk->icsk_ack.timeout;
-	}
+	pr_info("[TCP-AAD] Scheduling delayed ACK: timeout in %llu jiffies\n", ato);
+	timeout = jiffies + nsecs_to_jiffies(ato);
+	
 	icsk->icsk_ack.pending |= ICSK_ACK_SCHED | ICSK_ACK_TIMER;
 	icsk->icsk_ack.timeout = timeout;
 	sk_reset_timer(sk, &icsk->icsk_delack_timer, timeout);

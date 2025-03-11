@@ -360,7 +360,11 @@ static void tcp_delack_timer(struct timer_list *t)
 	struct inet_connection_sock *icsk =
 			from_timer(icsk, t, icsk_delack_timer);
 	struct sock *sk = &icsk->icsk_inet.sk;
+	struct tcp_sock *tp = tcp_sk(sk);
 
+	pr_info("[TCP-AAD] STOP THE TIMER BRO\n");
+	tp->delayed_segments = 0;
+	
 	bh_lock_sock(sk);
 	if (!sock_owned_by_user(sk)) {
 		tcp_delack_timer_handler(sk);

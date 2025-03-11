@@ -194,7 +194,7 @@ struct tcp_sock {
 	 * Documentation/networking/net_cachelines/tcp_sock.rst.
 	 * Please update the document when adding new fields.
 	 */
-
+	
 	/* inet_connection_sock has to be the first member of tcp_sock */
 	struct inet_connection_sock	inet_conn;
 
@@ -501,6 +501,14 @@ struct tcp_sock {
 	 */
 	struct request_sock __rcu *fastopen_rsk;
 	struct saved_syn *saved_syn;
+
+/* TCP-AAD related information */
+	u64 iat_min;
+	u64 iat_current;
+	u32 delayed_segments;
+	u64 max_delayed_segments;
+	u64 max_delayed_timeout;
+	u64 last_packet_time;
 };
 
 enum tsq_enum {
