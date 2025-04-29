@@ -306,6 +306,7 @@ static int tcp_write_timeout(struct sock *sk)
 /* Called with BH disabled */
 void tcp_delack_timer_handler(struct sock *sk)
 {
+	pr_info("-----------------------------delack");
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 
@@ -340,9 +341,11 @@ void tcp_delack_timer_handler(struct sock *sk)
 			icsk->icsk_ack.ato      = TCP_ATO_MIN;
 		}
 		tcp_mstamp_refresh(tp);
+		pr_info("SENDING AN ACK (TIMEOUT)");
 		tcp_send_ack(sk);
 		__NET_INC_STATS(sock_net(sk), LINUX_MIB_DELAYEDACKS);
 	}
+	pr_info("-----------------------------delack");
 }
 
 

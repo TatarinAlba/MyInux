@@ -813,6 +813,7 @@ static void tcp_save_lrcv_flowlabel(struct sock *sk, const struct sk_buff *skb)
  */
 static void tcp_event_data_recv(struct sock *sk, struct sk_buff *skb)
 {
+	pr_info("------------------------------------------------------------------------------------");
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	u32 now;
@@ -825,26 +826,38 @@ static void tcp_event_data_recv(struct sock *sk, struct sk_buff *skb)
 
 	now = tcp_jiffies32;
 
-	if (!icsk->icsk_ack.ato) {
+	if (!icsk->icsk_ack.ato) { 
+		pr_info("ATO is not defined; convert to quickACK mode:");
 		/* The _first_ data packet received, initialize
 		 * delayed ACK engine.
 		 */
 		tcp_incr_quickack(sk, TCP_MAX_QUICKACKS);
 		icsk->icsk_ack.ato = TCP_ATO_MIN;
+		pr_info("ATO ASSIGN TO TCP_ATO_MIN = %u", TCP_ATO_MIN);
 	} else {
 		int m = now - icsk->icsk_ack.lrcvtime;
 
+		pr_info("IAT=%d", m);
 		if (m <= TCP_ATO_MIN / 2) {
+			pr_info("FIRST_CASE");
 			/* The fastest case is the first. */
 			icsk->icsk_ack.ato = (icsk->icsk_ack.ato >> 1) + TCP_ATO_MIN / 2;
+			pr_info("ATO=%u", icsk->icsk_ack.ato);
 		} else if (m < icsk->icsk_ack.ato) {
+			pr_info("SECOND_CASE");
 			icsk->icsk_ack.ato = (icsk->icsk_ack.ato >> 1) + m;
-			if (icsk->icsk_ack.ato > icsk->icsk_rto)
+			if (icsk->icsk_ack.ato > icsk->icsk_rto) {
+				pr_info("SO BIG THAN RTO: %u", icsk->icsk_rto);
 				icsk->icsk_ack.ato = icsk->icsk_rto;
+			}
+			pr_info("ATO=%u", icsk->icsk_ack.ato);
 		} else if (m > icsk->icsk_rto) {
+			pr_info("LAST CASE");
+			pr_info("ATO=%u", icsk->icsk_ack.ato);
 			/* Too long gap. Apparently sender failed to
 			 * restart window, so that we send ACKs quickly.
 			 */
+			pr_info("COME BACK TO QUICKACKMODE");
 			tcp_incr_quickack(sk, TCP_MAX_QUICKACKS);
 		}
 	}
@@ -853,6 +866,7 @@ static void tcp_event_data_recv(struct sock *sk, struct sk_buff *skb)
 
 	tcp_ecn_check_ce(sk, skb);
 
+	pr_info("------------------------------------------------------------------------------------");
 	if (skb->len >= 128)
 		tcp_grow_window(sk, skb, true);
 }

@@ -4207,24 +4207,33 @@ void tcp_send_delayed_ack(struct sock *sk)
 		ato = min(ato, max_ato);
 	}
 
+	pr_info("------------------------------------------------------------------------------------");
 	ato = min_t(u32, ato, tcp_delack_max(sk));
-
+	pr_info("TCP_SEND_DELAYED_ACK -> ATO:%u", ato);
 	/* Stay within the limit we were given */
 	timeout = jiffies + ato;
 
+	pr_info("TIMEOUT=%u", timeout);
 	/* Use new timeout only if there wasn't a older one earlier. */
 	if (icsk->icsk_ack.pending & ICSK_ACK_TIMER) {
+		pr_info("TIMER IS ALREADY SET");
 		/* If delack timer is about to expire, send ACK now. */
 		if (time_before_eq(icsk->icsk_ack.timeout, jiffies + (ato >> 2))) {
 			tcp_send_ack(sk);
+			pr_info("TIMER IS ABOUT TO EXPIRE: SEND_ACK_NOW");
+			pr_info("------------------------------------------------------------------------------------");
 			return;
 		}
 
-		if (!time_before(timeout, icsk->icsk_ack.timeout))
+		if (!time_before(timeout, icsk->icsk_ack.timeout)) {
+			pr_info("CURRENT TIMEOUT IS LESS THAN EXISTING; MAKE LESS");
 			timeout = icsk->icsk_ack.timeout;
+		}
 	}
+	pr_info("SCHEDULE TIMEOUT");
 	icsk->icsk_ack.pending |= ICSK_ACK_SCHED | ICSK_ACK_TIMER;
 	icsk->icsk_ack.timeout = timeout;
+	pr_info("------------------------------------------------------------------------------------");
 	sk_reset_timer(sk, &icsk->icsk_delack_timer, timeout);
 }
 
