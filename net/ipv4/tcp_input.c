@@ -5764,62 +5764,90 @@ static void __tcp_ack_snd_check(struct sock *sk, int ofo_possible)
 	struct tcp_sock *tp = tcp_sk(sk);
 	unsigned long rtt, delay;
 
-	    /* More than one full frame received... */
+	pr_info("[__TCP ACK CHECK] --> Entering __tcp_ack_snd_check() for socket: %p\n", sk);
+	pr_info("[__TCP ACK CHECK] rcv_nxt: %u, rcv_wup: %u, copied_seq: %u, sk_rcvlowat: %u, rcv_wnd: %u\n",
+	        tp->rcv_nxt, tp->rcv_wup, tp->copied_seq, sk->sk_rcvlowat, tp->rcv_wnd);
+
+	/* === Immediate ACK Conditions === */
 	if (((tp->rcv_nxt - tp->rcv_wup) > inet_csk(sk)->icsk_ack.rcv_mss &&
-	     /* ... and right edge of window advances far enough.
-	      * (tcp_recvmsg() will send ACK otherwise).
-	      * If application uses SO_RCVLOWAT, we want send ack now if
-	      * we have not received enough bytes to satisfy the condition.
-	      */
-	    (tp->rcv_nxt - tp->copied_seq < sk->sk_rcvlowat ||
-	     __tcp_select_window(sk) >= tp->rcv_wnd)) ||
-	    /* We ACK each frame or... */
+	     (tp->rcv_nxt - tp->copied_seq < sk->sk_rcvlowat ||
+	      __tcp_select_window(sk) >= tp->rcv_wnd)) ||
 	    tcp_in_quickack_mode(sk) ||
-	    /* Protocol state mandates a one-time immediate ACK */
-	    inet_csk(sk)->icsk_ack.pending & ICSK_ACK_NOW) {
-		/* If we are running from __release_sock() in user context,
-		 * Defer the ack until tcp_release_cb().
-		 */
+	    (inet_csk(sk)->icsk_ack.pending & ICSK_ACK_NOW)) {
+
+		pr_info("[__TCP ACK CHECK] ACK required immediately due to:\n");
+		if ((tp->rcv_nxt - tp->rcv_wup) > inet_csk(sk)->icsk_ack.rcv_mss)
+			pr_info("  - Full frame received (rcv_nxt - rcv_wup > rcv_mss)\n");
+
+		if ((tp->rcv_nxt - tp->copied_seq < sk->sk_rcvlowat))
+			pr_info("  - SO_RCVLOWAT condition not met (copied_seq too small)\n");
+
+		if (__tcp_select_window(sk) >= tp->rcv_wnd)
+			pr_info("  - Receive window advanced sufficiently\n");
+
+		if (tcp_in_quickack_mode(sk))
+			pr_info("  - Quick ACK mode is active\n");
+
+		if (inet_csk(sk)->icsk_ack.pending & ICSK_ACK_NOW)
+			pr_info("  - ICSK_ACK_NOW set (protocol state mandates ACK)\n");
+
 		if (sock_owned_by_user_nocheck(sk) &&
 		    READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_backlog_ack_defer)) {
+			pr_info("[__TCP ACK CHECK] Deferring ACK due to user context and backlog defer enabled\n");
 			set_bit(TCP_ACK_DEFERRED, &sk->sk_tsq_flags);
 			return;
 		}
+
 send_now:
+		pr_info("[__TCP ACK CHECK] Sending immediate ACK\n");
 		tcp_send_ack(sk);
 		return;
 	}
 
+	/* === Delayed ACK Path === */
 	if (!ofo_possible || RB_EMPTY_ROOT(&tp->out_of_order_queue)) {
+		pr_info("[__TCP ACK CHECK] Sending delayed ACK (no out-of-order packets)\n");
 		tcp_send_delayed_ack(sk);
 		return;
 	}
 
+	/* === Compressed ACK Path (for SACK) === */
 	if (!tcp_is_sack(tp) ||
-	    tp->compressed_ack >= READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_comp_sack_nr))
+	    tp->compressed_ack >= READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_comp_sack_nr)) {
+		pr_info("[__TCP ACK CHECK] Compressed ACK threshold exceeded or SACK disabled — sending ACK\n");
 		goto send_now;
+	}
 
 	if (tp->compressed_ack_rcv_nxt != tp->rcv_nxt) {
+		pr_info("[__TCP ACK CHECK] rcv_nxt changed — resetting dup_ack_counter\n");
 		tp->compressed_ack_rcv_nxt = tp->rcv_nxt;
 		tp->dup_ack_counter = 0;
 	}
+
 	if (tp->dup_ack_counter < TCP_FASTRETRANS_THRESH) {
 		tp->dup_ack_counter++;
+		pr_info("[__TCP ACK CHECK] Incrementing dup_ack_counter (%d), sending ACK\n", tp->dup_ack_counter);
 		goto send_now;
 	}
-	tp->compressed_ack++;
-	if (hrtimer_is_queued(&tp->compressed_ack_timer))
-		return;
 
-	/* compress ack timer : 5 % of rtt, but no more than tcp_comp_sack_delay_ns */
+	tp->compressed_ack++;
+	pr_info("[__TCP ACK CHECK] Starting compressed ACK timer — compressed_ack: %d\n", tp->compressed_ack);
+
+	if (hrtimer_is_queued(&tp->compressed_ack_timer)) {
+		pr_info("[__TCP ACK CHECK] Compressed ACK timer already queued — no action\n");
+		return;
+	}
 
 	rtt = tp->rcv_rtt_est.rtt_us;
 	if (tp->srtt_us && tp->srtt_us < rtt)
 		rtt = tp->srtt_us;
 
 	delay = min_t(unsigned long,
-		      READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_comp_sack_delay_ns),
-		      rtt * (NSEC_PER_USEC >> 3)/20);
+	              READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_comp_sack_delay_ns),
+	              rtt * (NSEC_PER_USEC >> 3) / 20);
+
+	pr_info("[__TCP ACK CHECK] Scheduling compressed ACK timer with delay: %lu ns\n", delay);
+
 	sock_hold(sk);
 	hrtimer_start_range_ns(&tp->compressed_ack_timer, ns_to_ktime(delay),
 			       READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_comp_sack_slack_ns),
@@ -5828,11 +5856,16 @@ send_now:
 
 static inline void tcp_ack_snd_check(struct sock *sk)
 {
+	pr_info("[TCP ACK CHECK] --> Entering tcp_ack_snd_check() for socket: %p\n", sk);
+
 	if (!inet_csk_ack_scheduled(sk)) {
-		/* We sent a data segment already. */
+		pr_info("[TCP ACK CHECK] No ACK scheduled — skipping ACK transmission\n");
 		return;
 	}
+
+	pr_info("[TCP ACK CHECK] ACK scheduled — invoking __tcp_ack_snd_check()\n");
 	__tcp_ack_snd_check(sk, 1);
+	pr_info("[TCP ACK CHECK] ACK transmission completed via __tcp_ack_snd_check()\n");
 }
 
 /*
@@ -6105,133 +6138,110 @@ reset:
  */
 void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 {
+	pr_info("========== TCP ESTABLISHED PACKET RECEIVED ==========\n");
 	enum skb_drop_reason reason = SKB_DROP_REASON_NOT_SPECIFIED;
 	const struct tcphdr *th = (const struct tcphdr *)skb->data;
 	struct tcp_sock *tp = tcp_sk(sk);
 	unsigned int len = skb->len;
 
+	pr_info("[INFO] Packet Length: %u, Seq: %u, Ack_Seq: %u, Flags: 0x%x\n", 
+		len, TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->ack_seq, tcp_flag_word(th));
+
 	/* TCP congestion window tracking */
 	trace_tcp_probe(sk, skb);
 
+	/* Timestamp and destination setup */
 	tcp_mstamp_refresh(tp);
-	if (unlikely(!rcu_access_pointer(sk->sk_rx_dst)))
+	if (unlikely(!rcu_access_pointer(sk->sk_rx_dst))) {
+		pr_info("[INFO] Setting RX DST via sk_rx_dst_set\n");
 		inet_csk(sk)->icsk_af_ops->sk_rx_dst_set(sk, skb);
-	/*
-	 *	Header prediction.
-	 *	The code loosely follows the one in the famous
-	 *	"30 instruction TCP receive" Van Jacobson mail.
-	 *
-	 *	Van's trick is to deposit buffers into socket queue
-	 *	on a device interrupt, to call tcp_recv function
-	 *	on the receive process context and checksum and copy
-	 *	the buffer to user space. smart...
-	 *
-	 *	Our current scheme is not silly either but we take the
-	 *	extra cost of the net_bh soft interrupt processing...
-	 *	We do checksum and copy also but from device to kernel.
-	 */
+	}
 
+	/* Reset timestamp option flag */
 	tp->rx_opt.saw_tstamp = 0;
 
-	/*	pred_flags is 0xS?10 << 16 + snd_wnd
-	 *	if header_prediction is to be made
-	 *	'S' will always be tp->tcp_header_len >> 2
-	 *	'?' will be 0 for the fast path, otherwise pred_flags is 0 to
-	 *  turn it off	(when there are holes in the receive
-	 *	 space for instance)
-	 *	PSH flag is ignored.
-	 */
-
+	/* === Fast Path Eligibility Check === */
 	if ((tcp_flag_word(th) & TCP_HP_BITS) == tp->pred_flags &&
 	    TCP_SKB_CB(skb)->seq == tp->rcv_nxt &&
 	    !after(TCP_SKB_CB(skb)->ack_seq, tp->snd_nxt)) {
+		
+		pr_info("[FAST PATH] Fast path criteria matched\n");
+
 		int tcp_header_len = tp->tcp_header_len;
+		pr_info("[FAST PATH] TCP Header Length: %d\n", tcp_header_len);
 
-		/* Timestamp header prediction: tcp_header_len
-		 * is automatically equal to th->doff*4 due to pred_flags
-		 * match.
-		 */
-
-		/* Check timestamp */
 		if (tcp_header_len == sizeof(struct tcphdr) + TCPOLEN_TSTAMP_ALIGNED) {
-			/* No? Slow path! */
-			if (!tcp_parse_aligned_timestamp(tp, th))
-				goto slow_path;
+			pr_info("[FAST PATH] Timestamp header detected\n");
 
-			/* If PAWS failed, check it more carefully in slow path */
-			if ((s32)(tp->rx_opt.rcv_tsval - tp->rx_opt.ts_recent) < 0)
+			if (!tcp_parse_aligned_timestamp(tp, th)) {
+				pr_info("[FAST PATH] Timestamp parsing failed -> SLOW PATH\n");
 				goto slow_path;
+			}
 
-			/* DO NOT update ts_recent here, if checksum fails
-			 * and timestamp was corrupted part, it will result
-			 * in a hung connection since we will drop all
-			 * future packets due to the PAWS test.
-			 */
+			if ((s32)(tp->rx_opt.rcv_tsval - tp->rx_opt.ts_recent) < 0) {
+				pr_info("[FAST PATH] PAWS check failed -> SLOW PATH\n");
+				goto slow_path;
+			}
 		}
 
 		if (len <= tcp_header_len) {
-			/* Bulk data transfer: sender */
+			pr_info("[FAST PATH] No payload in packet (len <= header_len)\n");
+
 			if (len == tcp_header_len) {
-				/* Predicted packet is in window by definition.
-				 * seq == rcv_nxt and rcv_wup <= rcv_nxt.
-				 * Hence, check seq<=rcv_wup reduces to:
-				 */
-				if (tcp_header_len ==
-				    (sizeof(struct tcphdr) + TCPOLEN_TSTAMP_ALIGNED) &&
+				pr_info("[FAST PATH] Pure ACK (header only)\n");
+
+				if (tcp_header_len == (sizeof(struct tcphdr) + TCPOLEN_TSTAMP_ALIGNED) &&
 				    tp->rcv_nxt == tp->rcv_wup)
 					tcp_store_ts_recent(tp);
 
-				/* We know that such packets are checksummed
-				 * on entry.
-				 */
 				tcp_ack(sk, skb, 0);
 				__kfree_skb(skb);
 				tcp_data_snd_check(sk);
-				/* When receiving pure ack in fast path, update
-				 * last ts ecr directly instead of calling
-				 * tcp_rcv_rtt_measure_ts()
-				 */
+
 				tp->rcv_rtt_last_tsecr = tp->rx_opt.rcv_tsecr;
+
+				pr_info("[FAST PATH] Pure ACK processed and skb freed\n");
+				pr_info("========== TCP PACKET HANDLING COMPLETE ==========\n");
 				return;
-			} else { /* Header too small */
+			} else {
+				pr_warn("[FAST PATH] Header too small! Packet dropped.\n");
 				reason = SKB_DROP_REASON_PKT_TOO_SMALL;
 				TCP_INC_STATS(sock_net(sk), TCP_MIB_INERRS);
 				goto discard;
 			}
 		} else {
+			pr_info("[FAST PATH] Packet contains payload (len > header)\n");
 			int eaten = 0;
 			bool fragstolen = false;
 
-			if (tcp_checksum_complete(skb))
+			if (tcp_checksum_complete(skb)) {
+				pr_warn("[FAST PATH] TCP checksum failed\n");
 				goto csum_error;
+			}
 
-			if ((int)skb->truesize > sk->sk_forward_alloc)
+			if ((int)skb->truesize > sk->sk_forward_alloc) {
+				pr_info("[FAST PATH] Forward allocation exceeded\n");
 				goto step5;
+			}
 
-			/* Predicted packet is in window by definition.
-			 * seq == rcv_nxt and rcv_wup <= rcv_nxt.
-			 * Hence, check seq<=rcv_wup reduces to:
-			 */
-			if (tcp_header_len ==
-			    (sizeof(struct tcphdr) + TCPOLEN_TSTAMP_ALIGNED) &&
+			if (tcp_header_len == (sizeof(struct tcphdr) + TCPOLEN_TSTAMP_ALIGNED) &&
 			    tp->rcv_nxt == tp->rcv_wup)
 				tcp_store_ts_recent(tp);
 
 			tcp_rcv_rtt_measure_ts(sk, skb);
-
 			NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPHPHITS);
 
-			/* Bulk data transfer: receiver */
 			skb_dst_drop(skb);
 			__skb_pull(skb, tcp_header_len);
-			eaten = tcp_queue_rcv(sk, skb, &fragstolen);
 
+			eaten = tcp_queue_rcv(sk, skb, &fragstolen);
 			tcp_event_data_recv(sk, skb);
 
 			if (TCP_SKB_CB(skb)->ack_seq != tp->snd_una) {
-				/* Well, only one small jumplet in fast path... */
+				pr_info("[FAST PATH] Acknowledgment advanced (ack_seq != snd_una)\n");
 				tcp_ack(sk, skb, FLAG_DATA);
 				tcp_data_snd_check(sk);
+
 				if (!inet_csk_ack_scheduled(sk))
 					goto no_ack;
 			} else {
@@ -6239,46 +6249,54 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 			}
 
 			__tcp_ack_snd_check(sk, 0);
+
 no_ack:
 			if (eaten)
 				kfree_skb_partial(skb, fragstolen);
 			tcp_data_ready(sk);
+
+			pr_info("[FAST PATH] Payload processed, skb handled\n");
+			pr_info("========== TCP PACKET HANDLING COMPLETE ==========\n");
 			return;
 		}
 	}
 
 slow_path:
-	if (len < (th->doff << 2) || tcp_checksum_complete(skb))
+	pr_info("[SLOW PATH] Entered slow path processing\n");
+
+	if (len < (th->doff << 2) || tcp_checksum_complete(skb)) {
+		pr_warn("[SLOW PATH] Invalid header length or checksum failed\n");
 		goto csum_error;
+	}
 
 	if (!th->ack && !th->rst && !th->syn) {
+		pr_warn("[SLOW PATH] TCP packet without control flags -> DROP\n");
 		reason = SKB_DROP_REASON_TCP_FLAGS;
 		goto discard;
 	}
 
-	/*
-	 *	Standard slow path.
-	 */
-
-	if (!tcp_validate_incoming(sk, skb, th, 1))
+	if (!tcp_validate_incoming(sk, skb, th, 1)) {
+		pr_warn("[SLOW PATH] Incoming packet validation failed\n");
 		return;
+	}
 
 step5:
 	reason = tcp_ack(sk, skb, FLAG_SLOWPATH | FLAG_UPDATE_TS_RECENT);
 	if ((int)reason < 0) {
+		pr_warn("[SLOW PATH] TCP ACK rejected (reason: %d)\n", -(int)reason);
 		reason = -reason;
 		goto discard;
 	}
+
 	tcp_rcv_rtt_measure_ts(sk, skb);
-
-	/* Process urgent data. */
 	tcp_urg(sk, skb, th);
-
-	/* step 7: process the segment text */
 	tcp_data_queue(sk, skb);
 
 	tcp_data_snd_check(sk);
 	tcp_ack_snd_check(sk);
+
+	pr_info("[SLOW PATH] Packet successfully queued and ACK checked\n");
+	pr_info("========== TCP PACKET HANDLING COMPLETE ==========\n");
 	return;
 
 csum_error:
@@ -6286,9 +6304,12 @@ csum_error:
 	trace_tcp_bad_csum(skb);
 	TCP_INC_STATS(sock_net(sk), TCP_MIB_CSUMERRORS);
 	TCP_INC_STATS(sock_net(sk), TCP_MIB_INERRS);
+	pr_err("[ERROR] TCP checksum error -> DROP\n");
 
 discard:
+	pr_err("[DROP] Dropping packet, reason: %d\n", reason);
 	tcp_drop_reason(sk, skb, reason);
+	pr_info("========== TCP PACKET HANDLING COMPLETE ==========\n");
 }
 EXPORT_SYMBOL(tcp_rcv_established);
 
