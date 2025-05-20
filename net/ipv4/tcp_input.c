@@ -6163,6 +6163,7 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 	pr_info("[INFO] Packet Length: %u, Seq: %u, Ack_Seq: %u, Flags: 0x%x\n", 
 		len, TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->ack_seq, tcp_flag_word(th));
 
+	pr_info("[INFO] Time now is: %llu jiffies\n", jiffies);
 	/* TCP congestion window tracking */
 	trace_tcp_probe(sk, skb);
 
