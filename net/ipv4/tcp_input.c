@@ -5257,55 +5257,58 @@ static void tcp_data_queue(struct sock *sk, struct sk_buff *skb)
 	bool fragstolen;
 	int eaten;
 
-	/* If a subflow has been reset, the packet should not continue
-	 * to be processed, drop the packet.
-	 */
+	pr_info("[DATA QUEUE] --> Entered tcp_data_queue() for socket: %p\n", sk);
+	pr_info("[DATA QUEUE] skb len: %u, seq: %u, end_seq: %u, flags: 0x%x\n",
+	        skb->len, TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->end_seq, TCP_SKB_CB(skb)->tcp_flags);
+
+	/* MPTCP filtering */
 	if (sk_is_mptcp(sk) && !mptcp_incoming_options(sk, skb)) {
+		pr_info("[DATA QUEUE] Packet rejected by MPTCP option filter — dropped\n");
 		__kfree_skb(skb);
 		return;
 	}
 
+	/* Zero-length segment (invalid) */
 	if (TCP_SKB_CB(skb)->seq == TCP_SKB_CB(skb)->end_seq) {
+		pr_info("[DATA QUEUE] Zero-length segment detected — dropped\n");
 		__kfree_skb(skb);
 		return;
 	}
+
 	skb_dst_drop(skb);
 	__skb_pull(skb, tcp_hdr(skb)->doff * 4);
 
 	reason = SKB_DROP_REASON_NOT_SPECIFIED;
 	tp->rx_opt.dsack = 0;
 
-	/*  Queue data for delivery to the user.
-	 *  Packets in sequence go to the receive queue.
-	 *  Out of sequence packets to the out_of_order_queue.
-	 */
+	/* === In-sequence Packet === */
 	if (TCP_SKB_CB(skb)->seq == tp->rcv_nxt) {
-		if (tcp_receive_window(tp) == 0) {
-			/* Some stacks are known to send bare FIN packets
-			 * in a loop even if we send RWIN 0 in our ACK.
-			 * Accepting this FIN does not hurt memory pressure
-			 * because the FIN flag will simply be merged to the
-			 * receive queue tail skb in most cases.
-			 */
-			if (!skb->len &&
-			    (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN))
-				goto queue_and_out;
+		pr_info("[DATA QUEUE] In-sequence segment received (seq == rcv_nxt)\n");
 
+		if (tcp_receive_window(tp) == 0) {
+			pr_info("[DATA QUEUE] Receive window is zero\n");
+
+			if (!skb->len && (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN)) {
+				pr_info("[DATA QUEUE] Accepting FIN-only segment with zero window\n");
+				goto queue_and_out;
+			}
+
+			pr_info("[DATA QUEUE] Dropping segment — TCP zero window\n");
 			reason = SKB_DROP_REASON_TCP_ZEROWINDOW;
 			NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPZEROWINDOWDROP);
 			goto out_of_window;
 		}
 
-		/* Ok. In sequence. In window. */
 queue_and_out:
 		if (tcp_try_rmem_schedule(sk, skb, skb->truesize)) {
-			/* TODO: maybe ratelimit these WIN 0 ACK ? */
-			inet_csk(sk)->icsk_ack.pending |=
-					(ICSK_ACK_NOMEM | ICSK_ACK_NOW);
+			pr_info("[DATA QUEUE] Memory pressure — forcing ACK and scheduling data\n");
+
+			inet_csk(sk)->icsk_ack.pending |= (ICSK_ACK_NOMEM | ICSK_ACK_NOW);
 			inet_csk_schedule_ack(sk);
 			sk->sk_data_ready(sk);
 
 			if (skb_queue_len(&sk->sk_receive_queue) && skb->len) {
+				pr_info("[DATA QUEUE] sk_receive_queue not empty and data present — dropping packet\n");
 				reason = SKB_DROP_REASON_PROTO_MEM;
 				NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPRCVQDROP);
 				goto drop;
@@ -5314,19 +5317,26 @@ queue_and_out:
 		}
 
 		eaten = tcp_queue_rcv(sk, skb, &fragstolen);
-		if (skb->len)
+		pr_info("[DATA QUEUE] Segment queued to receive queue\n");
+
+		if (skb->len) {
+			pr_info("[DATA QUEUE] Payload present — invoking tcp_event_data_recv()\n");
 			tcp_event_data_recv(sk, skb);
-		if (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN)
+		}
+
+		if (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN) {
+			pr_info("[DATA QUEUE] FIN flag detected — calling tcp_fin()\n");
 			tcp_fin(sk);
+		}
 
 		if (!RB_EMPTY_ROOT(&tp->out_of_order_queue)) {
+			pr_info("[DATA QUEUE] Out-of-order queue not empty — calling tcp_ofo_queue()\n");
 			tcp_ofo_queue(sk);
 
-			/* RFC5681. 4.2. SHOULD send immediate ACK, when
-			 * gap in queue is filled.
-			 */
-			if (RB_EMPTY_ROOT(&tp->out_of_order_queue))
+			if (RB_EMPTY_ROOT(&tp->out_of_order_queue)) {
+				pr_info("[DATA QUEUE] Gaps filled — setting ACK_NOW\n");
 				inet_csk(sk)->icsk_ack.pending |= ICSK_ACK_NOW;
+			}
 		}
 
 		if (tp->rx_opt.num_sacks)
@@ -5336,41 +5346,42 @@ queue_and_out:
 
 		if (eaten > 0)
 			kfree_skb_partial(skb, fragstolen);
-		if (!sock_flag(sk, SOCK_DEAD))
+
+		if (!sock_flag(sk, SOCK_DEAD)) {
+			pr_info("[DATA QUEUE] Data ready callback scheduled\n");
 			tcp_data_ready(sk);
+		}
+
+		pr_info("[DATA QUEUE] <-- tcp_data_queue() complete\n");
 		return;
 	}
 
+	/* === Retransmit (Old Data) === */
 	if (!after(TCP_SKB_CB(skb)->end_seq, tp->rcv_nxt)) {
+		pr_info("[DATA QUEUE] Retransmitted or duplicate segment — setting D-SACK and ACK_NOW\n");
+
 		tcp_rcv_spurious_retrans(sk, skb);
-		/* A retransmit, 2nd most common case.  Force an immediate ack. */
 		reason = SKB_DROP_REASON_TCP_OLD_DATA;
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_DELAYEDACKLOST);
-		tcp_dsack_set(sk, TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->end_seq);
 
-out_of_window:
-		tcp_enter_quickack_mode(sk, TCP_MAX_QUICKACKS);
-		inet_csk_schedule_ack(sk);
-drop:
-		tcp_drop_reason(sk, skb, reason);
-		return;
+		tcp_dsack_set(sk, TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->end_seq);
+		goto out_of_window;
 	}
 
-	/* Out of window. F.e. zero window probe. */
-	if (!before(TCP_SKB_CB(skb)->seq,
-		    tp->rcv_nxt + tcp_receive_window(tp))) {
+	/* === Invalid: Outside Receive Window === */
+	if (!before(TCP_SKB_CB(skb)->seq, tp->rcv_nxt + tcp_receive_window(tp))) {
+		pr_info("[DATA QUEUE] Packet beyond right edge of receive window — dropping\n");
 		reason = SKB_DROP_REASON_TCP_OVERWINDOW;
 		goto out_of_window;
 	}
 
+	/* === Partial Overlap (Leading part invalid) === */
 	if (before(TCP_SKB_CB(skb)->seq, tp->rcv_nxt)) {
-		/* Partial packet, seq < rcv_next < end_seq */
+		pr_info("[DATA QUEUE] Partially overlapping packet — setting D-SACK\n");
 		tcp_dsack_set(sk, TCP_SKB_CB(skb)->seq, tp->rcv_nxt);
 
-		/* If window is closed, drop tail of packet. But after
-		 * remembering D-SACK for its head made in previous line.
-		 */
 		if (!tcp_receive_window(tp)) {
+			pr_info("[DATA QUEUE] Window closed — dropping tail\n");
 			reason = SKB_DROP_REASON_TCP_ZEROWINDOW;
 			NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPZEROWINDOWDROP);
 			goto out_of_window;
@@ -5378,8 +5389,22 @@ drop:
 		goto queue_and_out;
 	}
 
+	/* === Out-of-Order Packet === */
+	pr_info("[DATA QUEUE] Out-of-order segment received — queuing to OFO queue\n");
 	tcp_data_queue_ofo(sk, skb);
+	pr_info("[DATA QUEUE] <-- tcp_data_queue() complete (OFO)\n");
+	return;
+
+out_of_window:
+	pr_info("[DATA QUEUE] Entered out-of-window handling — scheduling quick ACK and dropping\n");
+	tcp_enter_quickack_mode(sk, TCP_MAX_QUICKACKS);
+	inet_csk_schedule_ack(sk);
+
+drop:
+	tcp_drop_reason(sk, skb, reason);
+	pr_info("[DATA QUEUE] <-- tcp_data_queue() complete (DROP)\n");
 }
+
 
 static struct sk_buff *tcp_skb_next(struct sk_buff *skb, struct sk_buff_head *list)
 {
