@@ -6237,7 +6237,7 @@ void tcp_rcv_established(struct sock *sk, struct sk_buff *skb)
 			}
 
 			if ((int)skb->truesize > sk->sk_forward_alloc) {
-				pr_info("[FAST PATH] Forward allocation exceeded\n");
+				pr_info("[FAST PATH] Forward allocation exceeded: truesize=%u, forward_alloc=%u\n", skb->truesize, sk->sk_forward_alloc);
 				goto step5;
 			}
 
