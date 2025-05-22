@@ -87,10 +87,10 @@ struct inet_connection_sock {
 	struct inet_bind2_bucket  *icsk_bind2_hash;
 	unsigned long		  icsk_timeout;
  	struct timer_list	  icsk_retransmit_timer;
- 	struct timer_list	  icsk_delack_timer;
+ 	struct hrtimer	  icsk_delack_timer;
 	__u32			  icsk_rto;
 	__u32                     icsk_rto_min;
-	__u32                     icsk_delack_max;
+	__u64                    icsk_delack_max;
 	__u32			  icsk_pmtu_cookie;
 	const struct tcp_congestion_ops *icsk_ca_ops;
 	const struct inet_connection_sock_af_ops *icsk_af_ops;
@@ -169,7 +169,7 @@ enum inet_csk_ack_state_t {
 
 void inet_csk_init_xmit_timers(struct sock *sk,
 			       void (*retransmit_handler)(struct timer_list *),
-			       void (*delack_handler)(struct timer_list *),
+			       void (*tcp_delack_hrtimer_callback)(struct hrtimer *),
 			       void (*keepalive_handler)(struct timer_list *));
 void inet_csk_clear_xmit_timers(struct sock *sk);
 void inet_csk_clear_xmit_timers_sync(struct sock *sk);

@@ -888,9 +888,66 @@ static enum hrtimer_restart tcp_compressed_ack_kick(struct hrtimer *timer)
 	return HRTIMER_NORESTART;
 }
 
+static enum hrtimer_restart tcp_delack_hrtimer_callback(struct hrtimer *timer) {
+	struct inet_connection_sock *icsk = container_of(timer, struct inet_connection_sock, icsk_delack_timer);
+    struct sock *sk = &icsk->icsk_inet.sk;
+
+    bh_lock_sock(sk);
+    if (!sock_owned_by_user(sk))
+        tcp_delack_hr_timer_handler(sk);
+    else
+        inet_csk_reset_xmit_timer(sk, ICSK_TIME_DACK, icsk->icsk_ack.ato, HRTIMER_MODE_REL_SOFT);
+    bh_unlock_sock(sk);
+
+    return HRTIMER_NORESTART;
+}
+
+/* Called with BH disabled */
+void tcp_delack_hr_timer_handler(struct sock *sk)
+{
+	struct inet_connection_sock *icsk = inet_csk(sk);
+	struct tcp_sock *tp = tcp_sk(sk);
+
+	if ((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_LISTEN))
+		return;
+
+	/* Handling the sack compression case */
+	if (tp->compressed_ack) {
+		tcp_mstamp_refresh(tp);
+		tcp_sack_compress_send_ack(sk);
+		return;
+	}
+
+	if (!(icsk->icsk_ack.pending & ICSK_ACK_TIMER))
+		return;
+
+	// if (time_after(icsk->icsk_ack.timeout, jiffies)) {
+	// 	sk_reset_timer(sk, &icsk->icsk_delack_timer, icsk->icsk_ack.timeout);
+	// 	return;
+	// }
+
+	icsk->icsk_ack.pending &= ~ICSK_ACK_TIMER;
+
+	if (inet_csk_ack_scheduled(sk)) {
+		// if (!inet_csk_in_pingpong_mode(sk)) {
+		// 	/* Delayed ACK missed: inflate ATO. */
+		// 	icsk->icsk_ack.ato = min_t(u32, icsk->icsk_ack.ato << 1, icsk->icsk_rto);
+		// } else {
+		// 	/* Delayed ACK missed: leave pingpong mode and
+		// 	 * deflate ATO.
+		// 	 */
+		// 	inet_csk_exit_pingpong_mode(sk);
+		// 	icsk->icsk_ack.ato      = TCP_ATO_MIN;
+		// }
+		tcp_mstamp_refresh(tp);
+		tcp_send_ack(sk);
+		__NET_INC_STATS(sock_net(sk), LINUX_MIB_DELAYEDACKS);
+	}
+}
+
 void tcp_init_xmit_timers(struct sock *sk)
 {
-	inet_csk_init_xmit_timers(sk, &tcp_write_timer, &tcp_delack_timer,
+	inet_csk_init_xmit_timers(sk, &tcp_write_timer, &tcp_delack_hrtimer_callback,
 				  &tcp_keepalive_timer);
 	hrtimer_init(&tcp_sk(sk)->pacing_timer, CLOCK_MONOTONIC,
 		     HRTIMER_MODE_ABS_PINNED_SOFT);
