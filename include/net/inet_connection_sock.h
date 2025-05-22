@@ -113,12 +113,12 @@ struct inet_connection_sock {
 		__u8		  quick;	 /* Scheduled number of quick acks	   */
 		__u8		  pingpong;	 /* The session is interactive		   */
 		__u8		  retry;	 /* Number of attempts			   */
-		#define ATO_BITS 8
-		__u32		  ato:ATO_BITS,	 /* Predicted tick of soft clock	   */
-				  lrcv_flowlabel:20, /* last received ipv6 flowlabel	   */
+		// #define ATO_BITS 8
+		__u64		  ato;	 /* Predicted tick of soft clock	   */
+        __u32	  lrcv_flowlabel:28, /* last received ipv6 flowlabel	   */
 				  unused:4;
-		unsigned long	  timeout;	 /* Currently scheduled timeout		   */
-		__u32		  lrcvtime;	 /* timestamp of last received data packet */
+		unsigned long long  timeout;	 /* Currently scheduled timeout		   */
+		__u64		  lrcvtime;	 /* timestamp of last received data packet */
 		__u16		  last_seg_size; /* Size of last incoming segment	   */
 		__u16		  rcv_mss;	 /* MSS used for delayed ACK decisions	   */
 	} icsk_ack;
@@ -138,6 +138,11 @@ struct inet_connection_sock {
 	u32			  icsk_user_timeout;
 
 	u64			  icsk_ca_priv[104 / sizeof(u64)];
+	// fields for ability to work with TCP-AAD
+	u64 iat_min;
+	u64 iat_curr;
+	u64 delayed_segs;
+	u64 last_reset_time;
 #define ICSK_CA_PRIV_SIZE	  sizeof_field(struct inet_connection_sock, icsk_ca_priv)
 };
 

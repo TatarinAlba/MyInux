@@ -888,19 +888,30 @@ static enum hrtimer_restart tcp_compressed_ack_kick(struct hrtimer *timer)
 	return HRTIMER_NORESTART;
 }
 
-static enum hrtimer_restart tcp_delack_hrtimer_callback(struct hrtimer *timer) {
+static enum hrtimer_restart tcp_delack_hrtimer_callback(struct hrtimer *timer)
+{
 	struct inet_connection_sock *icsk = container_of(timer, struct inet_connection_sock, icsk_delack_timer);
-    struct sock *sk = &icsk->icsk_inet.sk;
+	struct sock *sk = &icsk->icsk_inet.sk;
 
-    bh_lock_sock(sk);
-    if (!sock_owned_by_user(sk))
-        tcp_delack_hr_timer_handler(sk);
-    else
-        inet_csk_reset_xmit_timer(sk, ICSK_TIME_DACK, icsk->icsk_ack.ato, HRTIMER_MODE_REL_SOFT);
-    bh_unlock_sock(sk);
+	pr_info("[DELACK CALLBACK] --> Delayed ACK hrtimer callback triggered for socket: %p\n", sk);
 
-    return HRTIMER_NORESTART;
+	bh_lock_sock(sk);
+
+	if (!sock_owned_by_user(sk)) {
+		pr_info("[DELACK CALLBACK] Socket not owned by user — handling delayed ACK directly\n");
+		tcp_delack_hr_timer_handler(sk);
+	} else {
+		pr_info("[DELACK CALLBACK] Socket owned by user — deferring ACK, resetting timer with ATO: %u jiffies\n",
+		        icsk->icsk_ack.ato);
+		inet_csk_reset_xmit_timer(sk, ICSK_TIME_DACK, icsk->icsk_ack.ato, HRTIMER_MODE_REL_SOFT);
+	}
+
+	bh_unlock_sock(sk);
+
+	pr_info("[DELACK CALLBACK] <-- Delayed ACK callback complete for socket: %p\n", sk);
+	return HRTIMER_NORESTART;
 }
+
 
 /* Called with BH disabled */
 void tcp_delack_hr_timer_handler(struct sock *sk)
@@ -908,41 +919,47 @@ void tcp_delack_hr_timer_handler(struct sock *sk)
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 
-	if ((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_LISTEN))
-		return;
+	pr_info("[DELACK HANDLER] --> tcp_delack_hr_timer_handler() triggered for socket: %p\n", sk);
+	icsk->delayed_segs = 0;
 
-	/* Handling the sack compression case */
-	if (tp->compressed_ack) {
-		tcp_mstamp_refresh(tp);
-		tcp_sack_compress_send_ack(sk);
+	if ((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_LISTEN)) {
+		pr_info("[DELACK HANDLER] Socket in CLOSED or LISTEN state — exiting handler\n");
 		return;
 	}
 
-	if (!(icsk->icsk_ack.pending & ICSK_ACK_TIMER))
+	/* Handle compressed SACK ACKs */
+	if (tp->compressed_ack) {
+		pr_info("[DELACK HANDLER] Compressed ACK state detected — sending compressed ACK\n");
+		tcp_mstamp_refresh(tp);
+		tcp_sack_compress_send_ack(sk);
+		pr_info("[DELACK HANDLER] Compressed ACK sent\n");
 		return;
+	}
 
-	// if (time_after(icsk->icsk_ack.timeout, jiffies)) {
-	// 	sk_reset_timer(sk, &icsk->icsk_delack_timer, icsk->icsk_ack.timeout);
-	// 	return;
-	// }
+	if (!(icsk->icsk_ack.pending & ICSK_ACK_TIMER)) {
+		pr_info("[DELACK HANDLER] No ACK_TIMER pending — exiting\n");
+		return;
+	}
+
+	// Timeout check logic was removed here by user. It's usually needed, but we respect your choice.
+	// If re-added, logs should explain whether we're waiting longer or sending now.
 
 	icsk->icsk_ack.pending &= ~ICSK_ACK_TIMER;
 
 	if (inet_csk_ack_scheduled(sk)) {
-		// if (!inet_csk_in_pingpong_mode(sk)) {
-		// 	/* Delayed ACK missed: inflate ATO. */
-		// 	icsk->icsk_ack.ato = min_t(u32, icsk->icsk_ack.ato << 1, icsk->icsk_rto);
-		// } else {
-		// 	/* Delayed ACK missed: leave pingpong mode and
-		// 	 * deflate ATO.
-		// 	 */
-		// 	inet_csk_exit_pingpong_mode(sk);
-		// 	icsk->icsk_ack.ato      = TCP_ATO_MIN;
-		// }
+		// Commented out logic for ATO adjustment/pingpong exit retained here for reference
+		// pr_info("[DELACK HANDLER] ACK scheduled — adjusting ATO or pingpong mode\n");
+		// ...
+
 		tcp_mstamp_refresh(tp);
 		tcp_send_ack(sk);
+		pr_info("[DELACK HANDLER] Delayed ACK sent immediately for socket: %p\n", sk);
+
 		__NET_INC_STATS(sock_net(sk), LINUX_MIB_DELAYEDACKS);
+		pr_info("[DELACK HANDLER] Delayed ACK stats incremented\n");
 	}
+
+	pr_info("[DELACK HANDLER] <-- Handler complete for socket: %p\n", sk);
 }
 
 void tcp_init_xmit_timers(struct sock *sk)

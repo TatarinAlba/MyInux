@@ -467,6 +467,11 @@ void tcp_init_sock(struct sock *sk)
 
 	icsk->icsk_sync_mss = tcp_sync_mss;
 
+	icsk->iat_min = UINT64_MAX;
+	icsk->iat_curr = 0;
+	icsk->delayed_segs = 0;
+	icsk->last_reset_time = 0;
+	
 	WRITE_ONCE(sk->sk_sndbuf, READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_wmem[1]));
 	WRITE_ONCE(sk->sk_rcvbuf, READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_rmem[1]));
 	tcp_scaling_ratio_init(sk);

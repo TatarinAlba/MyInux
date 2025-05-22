@@ -4179,65 +4179,20 @@ u32 tcp_delack_max(const struct sock *sk)
 void tcp_send_delayed_ack(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
-	int ato = icsk->icsk_ack.ato;
+	unsigned long ato = icsk->icsk_ack.ato;
 	unsigned long timeout;
 
 	pr_info("[DELAYED ACK] --> Entering tcp_send_delayed_ack() for socket: %p\n", sk);
-	pr_info("[DELAYED ACK] Initial ATO: %d jiffies\n", ato);
-
-	/* === Adjust ATO if above TCP_DELACK_MIN === */
-	if (ato > TCP_DELACK_MIN) {
-		const struct tcp_sock *tp = tcp_sk(sk);
-		int max_ato = HZ / 2;
-
-		if (inet_csk_in_pingpong_mode(sk) ||
-		    (icsk->icsk_ack.pending & ICSK_ACK_PUSHED)) {
-			max_ato = TCP_DELACK_MAX;
-			pr_info("[DELAYED ACK] Ping-pong or ACK_PUSHED detected — using TCP_DELACK_MAX (%d jiffies)\n", TCP_DELACK_MAX);
-		}
-
-		if (tp->srtt_us) {
-			int rtt = max_t(int, usecs_to_jiffies(tp->srtt_us >> 3), TCP_DELACK_MIN);
-			pr_info("[DELAYED ACK] RTT estimate available: srtt_us = %u → bounded RTT = %d jiffies\n", tp->srtt_us, rtt);
-
-			if (rtt < max_ato) {
-				pr_info("[DELAYED ACK] RTT bound tighter than max_ato (%d), updating max_ato = %d\n", max_ato, rtt);
-				max_ato = rtt;
-			}
-		}
-
-		ato = min(ato, max_ato);
-		pr_info("[DELAYED ACK] Updated ATO after RTT bounding: %d jiffies\n", ato);
-	}
-
-	ato = min_t(u32, ato, tcp_delack_max(sk));
-	pr_info("[DELAYED ACK] ATO clamped to tcp_delack_max: %d jiffies\n", ato);
+	pr_info("[DELAYED ACK] Initial ATO: %d microsecs\n", ato);
 
 	/* Calculate new timeout */
-	timeout = jiffies + ato;
-	pr_info("[DELAYED ACK] Scheduled ACK timeout: %lu (in %d jiffies)\n", timeout, ato);
-
-	/* === If an ACK timer is already pending === */
-	if (icsk->icsk_ack.pending & ICSK_ACK_TIMER) {
-		pr_info("[DELAYED ACK] ACK timer already pending\n");
-
-		if (time_before_eq(icsk->icsk_ack.timeout, jiffies + (ato >> 2))) {
-			pr_info("[DELAYED ACK] Existing timer is expiring soon — sending ACK immediately\n");
-			tcp_send_ack(sk);
-			return;
-		}
-
-		if (!time_before(timeout, icsk->icsk_ack.timeout)) {
-			pr_info("[DELAYED ACK] Keeping existing earlier timeout: %lu\n", icsk->icsk_ack.timeout);
-			timeout = icsk->icsk_ack.timeout;
-		}
-	}
+	timeout = ktime_get_ns() / 1000 + ato;
+	pr_info("[DELAYED ACK] Scheduled ACK timeout: %lu (in %lu microsecs)\n", timeout, ato);
 
 	/* === Schedule the delayed ACK === */
 	icsk->icsk_ack.pending |= ICSK_ACK_SCHED | ICSK_ACK_TIMER;
 	icsk->icsk_ack.timeout = timeout;
-	sk_reset_timer(sk, &icsk->icsk_delack_timer, timeout);
-
+	hrtimer_start(&icsk->icsk_delack_timer, timeout, HRTIMER_MODE_REL_SOFT);
 	pr_info("[DELAYED ACK] Delayed ACK scheduled successfully — timeout set to: %lu\n", timeout);
 	pr_info("[DELAYED ACK] <-- Exiting tcp_send_delayed_ack()\n");
 }

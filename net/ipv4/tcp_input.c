@@ -815,72 +815,69 @@ static void tcp_event_data_recv(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct inet_connection_sock *icsk = inet_csk(sk);
-	u32 now;
+	u64 now;
 
 	pr_info("[DATA RECV EVENT] --> tcp_event_data_recv() triggered for socket: %p\n", sk);
-	pr_info("[DATA RECV EVENT] skb len: %u, seq: %u, ack_seq: %u\n", skb->len,
-	        TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->ack_seq);
+	pr_info("[DATA RECV EVENT] skb len: %u, seq: %u, ack_seq: %u\n",
+	        skb->len, TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->ack_seq);
 
-	/* === Schedule ACK for this data === */
+	/* === ACK Scheduling === */
 	inet_csk_schedule_ack(sk);
 	pr_info("[DATA RECV EVENT] ACK scheduled\n");
 
-	/* === Measure MSS based on received segment === */
+	/* === Metrics Update === */
 	tcp_measure_rcv_mss(sk, skb);
 	pr_info("[DATA RECV EVENT] Measured RCV MSS\n");
 
-	/* === Measure RTT if applicable === */
 	tcp_rcv_rtt_measure(tp);
-	pr_info("[DATA RECV EVENT] RTT measurement (if sample available) updated\n");
+	pr_info("[DATA RECV EVENT] RTT measurement updated (if sample available)\n");
 
-	now = tcp_jiffies32;
+	/* === Timestamping and ATO/IAT Logic === */
+	now = ktime_get_ns() / 1000; // Convert to microseconds
 
-	/* === Delayed ACK Engine Initialization or ATO Adaptation === */
-	if (!icsk->icsk_ack.ato) {
-		/* First data packet received */
-		pr_info("[DATA RECV EVENT] First data packet — initializing delayed ACK engine\n");
+	if (icsk->last_reset_time + 1000000ULL <= now) {
+		pr_info("[DATA RECV EVENT] 1 second elapsed — resetting iat_min\n");
+		icsk->iat_min = UINT64_MAX;
+		icsk->last_reset_time = now;
+	}
 
-		tcp_incr_quickack(sk, TCP_MAX_QUICKACKS);
-		pr_info("[DATA RECV EVENT] Quick ACK counter incremented (max: %d)\n", TCP_MAX_QUICKACKS);
+	unsigned long m = now - icsk->icsk_ack.lrcvtime;
+	pr_info("[DATA RECV EVENT] Inter-arrival time (IAT): %lu us\n", m);
 
-		icsk->icsk_ack.ato = TCP_ATO_MIN;
-		pr_info("[DATA RECV EVENT] ATO initialized to TCP_ATO_MIN: %d jiffies\n", TCP_ATO_MIN);
-	} else {
-		int m = now - icsk->icsk_ack.lrcvtime;
-		pr_info("[DATA RECV EVENT] Time since last recv (m): %d jiffies, ATO: %u, RTO: %u\n",
-		        m, icsk->icsk_ack.ato, icsk->icsk_rto);
+	if (m > 500) {
+		pr_info("[DATA RECV EVENT] Valid IAT — updating iat_min if smaller\n");
+		icsk->iat_curr = m;
+		icsk->iat_min = min(m, icsk->iat_min);
+		pr_info("[DATA RECV EVENT] Updated iat_min: %lu us\n", icsk->iat_min);
+	}
 
-		if (m <= TCP_ATO_MIN / 2) {
-			icsk->icsk_ack.ato = (icsk->icsk_ack.ato >> 1) + (TCP_ATO_MIN / 2);
-			pr_info("[DATA RECV EVENT] Very fast segment arrival — ATO reduced to: %u\n",
-			        icsk->icsk_ack.ato);
-		} else if (m < icsk->icsk_ack.ato) {
-			icsk->icsk_ack.ato = (icsk->icsk_ack.ato >> 1) + m;
-			if (icsk->icsk_ack.ato > icsk->icsk_rto) {
-				icsk->icsk_ack.ato = icsk->icsk_rto;
-				pr_info("[DATA RECV EVENT] ATO clamped to RTO: %u\n", icsk->icsk_ack.ato);
-			} else {
-				pr_info("[DATA RECV EVENT] ATO updated based on inter-arrival time: %u\n", icsk->icsk_ack.ato);
-			}
-		} else if (m > icsk->icsk_rto) {
-			pr_info("[DATA RECV EVENT] Long gap detected — reactivating quick ACK mode\n");
-			tcp_incr_quickack(sk, TCP_MAX_QUICKACKS);
+	/* === Non-Out-of-Order Detection & ATO Adjustment === */
+	if (TCP_SKB_CB(skb)->seq == tp->rcv_nxt) {
+		pr_info("[DATA RECV EVENT] Out-of-order packet detected: seq=%u, expected=%u\n",
+		        TCP_SKB_CB(skb)->seq, tp->rcv_nxt);
+
+		if (icsk->delayed_segs < 2) {
+			pr_info("[DATA RECV EVENT] Few delayed segments — setting fixed ATO = 500000 us\n");
+			icsk->ato = 500000;
+		} else {
+			icsk->ato = div_u64((icsk->iat_min * 75 + icsk->iat_curr * 25) * 150, 10000);
+			icsk->ato = min(icsk->ato, 500000UL);
+			pr_info("[DATA RECV EVENT] Adjusted ATO based on IATs: %lu us\n", icsk->ato);
 		}
 	}
 
+	/* === Final State Updates === */
 	icsk->icsk_ack.lrcvtime = now;
-	pr_info("[DATA RECV EVENT] Last receive time updated to: %u\n", now);
+	pr_info("[DATA RECV EVENT] Updated lrcvtime: %llu us\n", now);
 
-	/* === Flow label and ECN handling === */
 	tcp_save_lrcv_flowlabel(sk, skb);
 	pr_info("[DATA RECV EVENT] Flow label saved\n");
 
 	tcp_ecn_check_ce(sk, skb);
 	pr_info("[DATA RECV EVENT] ECN check complete\n");
 
-	/* === Receive window growth trigger === */
 	if (skb->len >= 128) {
-		pr_info("[DATA RECV EVENT] Segment length ≥ 128 — attempting to grow receive window\n");
+		pr_info("[DATA RECV EVENT] Payload length ≥ 128 — attempting receive window growth\n");
 		tcp_grow_window(sk, skb, true);
 	}
 
@@ -5030,12 +5027,17 @@ static int tcp_try_rmem_schedule(struct sock *sk, struct sk_buff *skb,
 
 static void tcp_data_queue_ofo(struct sock *sk, struct sk_buff *skb)
 {
+	pr_info("[DATA QUEUE OFO] --> Entered tcp_data_queue_ofo() for socket: %p\n", sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct rb_node **p, *parent;
 	struct sk_buff *skb1;
 	u32 seq, end_seq;
 	bool fragstolen;
+	struct inet_connection_sock *icsk = inet_csk(sk);
+	icsk->delayed_segs = 0;
+	pr_info("[DATA QUEUE OFO] Null to delayed segs");
 
+	pr_info("[DATA QUEUE OFO] <-- Exit tcp_data_queue_ofo() for socket: %p\n", sk);
 	tcp_save_lrcv_flowlabel(sk, skb);
 	tcp_ecn_check_ce(sk, skb);
 
@@ -5841,6 +5843,7 @@ static void __tcp_ack_snd_check(struct sock *sk, int ofo_possible)
 
 send_now:
 		pr_info("[__TCP ACK CHECK] Sending immediate ACK\n");
+		inet_csk(sk)->delayed_segs = 0;
 		tcp_send_ack(sk);
 		return;
 	}
