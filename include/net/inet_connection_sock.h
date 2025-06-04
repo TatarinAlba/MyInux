@@ -174,7 +174,7 @@ enum inet_csk_ack_state_t {
 
 void inet_csk_init_xmit_timers(struct sock *sk,
 			       void (*retransmit_handler)(struct timer_list *),
-			       void (*tcp_delack_hrtimer_callback)(struct hrtimer *),
+			       enum  hrtimer_restart (*tcp_delack_hrtimer) (struct hrtimer *timer),
 			       void (*keepalive_handler)(struct timer_list *));
 void inet_csk_clear_xmit_timers(struct sock *sk);
 void inet_csk_clear_xmit_timers_sync(struct sock *sk);
@@ -210,7 +210,7 @@ static inline void inet_csk_clear_xmit_timer(struct sock *sk, const int what)
 		icsk->icsk_ack.pending = 0;
 		icsk->icsk_ack.retry = 0;
 #ifdef INET_CSK_CLEAR_TIMERS
-		sk_stop_timer(sk, &icsk->icsk_delack_timer);
+		hrtimer_cancel(&icsk->icsk_delack_timer);
 #endif
 	} else {
 		pr_debug("inet_csk BUG: unknown timer value\n");
@@ -239,8 +239,8 @@ static inline void inet_csk_reset_xmit_timer(struct sock *sk, const int what,
 		sk_reset_timer(sk, &icsk->icsk_retransmit_timer, icsk->icsk_timeout);
 	} else if (what == ICSK_TIME_DACK) {
 		icsk->icsk_ack.pending |= ICSK_ACK_TIMER;
-		icsk->icsk_ack.timeout = jiffies + when;
-		sk_reset_timer(sk, &icsk->icsk_delack_timer, icsk->icsk_ack.timeout);
+		icsk->icsk_ack.timeout = ktime_get_ns() / 1000 + when;
+		hrtimer_start(&icsk->icsk_delack_timer, icsk->icsk_ack.timeout * 1000, HRTIMER_MODE_ABS_PINNED_SOFT);
 	} else {
 		pr_debug("inet_csk BUG: unknown timer value\n");
 	}

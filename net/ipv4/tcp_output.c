@@ -4192,7 +4192,7 @@ void tcp_send_delayed_ack(struct sock *sk)
 	/* === Schedule the delayed ACK === */
 	icsk->icsk_ack.pending |= ICSK_ACK_SCHED | ICSK_ACK_TIMER;
 	icsk->icsk_ack.timeout = timeout;
-	hrtimer_start(&icsk->icsk_delack_timer, timeout, HRTIMER_MODE_REL_SOFT);
+	hrtimer_start(&icsk->icsk_delack_timer, timeout * 1000, HRTIMER_MODE_ABS_PINNED_SOFT);
 	pr_info("[DELAYED ACK] Delayed ACK scheduled successfully — timeout set to: %lu\n", timeout);
 	pr_info("[DELAYED ACK] <-- Exiting tcp_send_delayed_ack()\n");
 }

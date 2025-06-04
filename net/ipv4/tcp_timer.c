@@ -336,7 +336,7 @@ void tcp_delack_timer_handler(struct sock *sk)
 	if (time_after(icsk->icsk_ack.timeout, jiffies)) {
 		pr_info("[DELAYED ACK TIMER] Timer not yet expired — rescheduling to timeout: %lu\n",
 		        icsk->icsk_ack.timeout);
-		sk_reset_timer(sk, &icsk->icsk_delack_timer, icsk->icsk_ack.timeout);
+		hrtimer_init(&icsk->icsk_delack_timer, icsk->icsk_ack.timeout, HRTIMER_MODE_ABS_PINNED_SOFT);
 		return;
 	}
 
@@ -359,6 +359,7 @@ void tcp_delack_timer_handler(struct sock *sk)
 		}
 
 		tcp_mstamp_refresh(tp);
+		icsk->delayed_segs = 0;
 		pr_info("[DELAYED ACK TIMER] Sending ACK due to delayed timeout\n");
 		tcp_send_ack(sk);
 		__NET_INC_STATS(sock_net(sk), LINUX_MIB_DELAYEDACKS);
@@ -368,34 +369,51 @@ void tcp_delack_timer_handler(struct sock *sk)
 	pr_info("[DELAYED ACK TIMER] <-- Handler completed for socket: %p\n", sk);
 }
 
-
-/**
- *  tcp_delack_timer() - The TCP delayed ACK timeout handler
- *  @t:  Pointer to the timer. (gets casted to struct sock *)
- *
- *  This function gets (indirectly) called when the kernel timer for a TCP packet
- *  of this socket expires. Calls tcp_delack_timer_handler() to do the actual work.
- *
- *  Returns: Nothing (void)
- */
-static void tcp_delack_timer(struct timer_list *t)
+static enum hrtimer_restart tcp_delack_hrtimer(struct hrtimer *timer)
 {
-	struct inet_connection_sock *icsk =
-			from_timer(icsk, t, icsk_delack_timer);
+	struct inet_connection_sock *icsk = container_of(timer, struct inet_connection_sock, icsk_delack_timer);
 	struct sock *sk = &icsk->icsk_inet.sk;
 
 	bh_lock_sock(sk);
 	if (!sock_owned_by_user(sk)) {
+		pr_info("[DELAYED CAL] CHEEEECCk");
 		tcp_delack_timer_handler(sk);
 	} else {
 		__NET_INC_STATS(sock_net(sk), LINUX_MIB_DELAYEDACKLOCKED);
-		/* deleguate our work to tcp_release_cb() */
-		if (!test_and_set_bit(TCP_DELACK_TIMER_DEFERRED, &sk->sk_tsq_flags))
-			sock_hold(sk);
 	}
 	bh_unlock_sock(sk);
-	sock_put(sk);
+
+	return HRTIMER_NORESTART;
 }
+
+
+/**
+//  *  tcp_delack_timer() - The TCP delayed ACK timeout handler
+//  *  @t:  Pointer to the timer. (gets casted to struct sock *)
+//  *
+//  *  This function gets (indirectly) called when the kernel timer for a TCP packet
+//  *  of this socket expires. Calls tcp_delack_timer_handler() to do the actual work.
+//  *
+//  *  Returns: Nothing (void)
+//  */
+// static void tcp_delack_timer(struct timer_list *t)
+// {
+// 	struct inet_connection_sock *icsk =
+// 			from_timer(icsk, t, icsk_delack_timer);
+// 	struct sock *sk = &icsk->icsk_inet.sk;
+
+// 	bh_lock_sock(sk);
+// 	if (!sock_owned_by_user(sk)) {
+// 		tcp_delack_timer_handler(sk);
+// 	} else {
+// 		__NET_INC_STATS(sock_net(sk), LINUX_MIB_DELAYEDACKLOCKED);
+// 		/* deleguate our work to tcp_release_cb() */
+// 		if (!test_and_set_bit(TCP_DELACK_TIMER_DEFERRED, &sk->sk_tsq_flags))
+// 			sock_hold(sk);
+// 	}
+// 	bh_unlock_sock(sk);
+// 	sock_put(sk);
+// }
 
 static void tcp_probe_timer(struct sock *sk)
 {
@@ -888,83 +906,9 @@ static enum hrtimer_restart tcp_compressed_ack_kick(struct hrtimer *timer)
 	return HRTIMER_NORESTART;
 }
 
-static enum hrtimer_restart tcp_delack_hrtimer_callback(struct hrtimer *timer)
-{
-	struct inet_connection_sock *icsk = container_of(timer, struct inet_connection_sock, icsk_delack_timer);
-	struct sock *sk = &icsk->icsk_inet.sk;
-
-	pr_info("[DELACK CALLBACK] --> Delayed ACK hrtimer callback triggered for socket: %p\n", sk);
-
-	bh_lock_sock(sk);
-
-	if (!sock_owned_by_user(sk)) {
-		pr_info("[DELACK CALLBACK] Socket not owned by user — handling delayed ACK directly\n");
-		tcp_delack_hr_timer_handler(sk);
-	} else {
-		pr_info("[DELACK CALLBACK] Socket owned by user — deferring ACK, resetting timer with ATO: %u jiffies\n",
-		        icsk->icsk_ack.ato);
-		inet_csk_reset_xmit_timer(sk, ICSK_TIME_DACK, icsk->icsk_ack.ato, HRTIMER_MODE_REL_SOFT);
-	}
-
-	bh_unlock_sock(sk);
-
-	pr_info("[DELACK CALLBACK] <-- Delayed ACK callback complete for socket: %p\n", sk);
-	return HRTIMER_NORESTART;
-}
-
-
-/* Called with BH disabled */
-void tcp_delack_hr_timer_handler(struct sock *sk)
-{
-	struct inet_connection_sock *icsk = inet_csk(sk);
-	struct tcp_sock *tp = tcp_sk(sk);
-
-	pr_info("[DELACK HANDLER] --> tcp_delack_hr_timer_handler() triggered for socket: %p\n", sk);
-	icsk->delayed_segs = 0;
-
-	if ((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_LISTEN)) {
-		pr_info("[DELACK HANDLER] Socket in CLOSED or LISTEN state — exiting handler\n");
-		return;
-	}
-
-	/* Handle compressed SACK ACKs */
-	if (tp->compressed_ack) {
-		pr_info("[DELACK HANDLER] Compressed ACK state detected — sending compressed ACK\n");
-		tcp_mstamp_refresh(tp);
-		tcp_sack_compress_send_ack(sk);
-		pr_info("[DELACK HANDLER] Compressed ACK sent\n");
-		return;
-	}
-
-	if (!(icsk->icsk_ack.pending & ICSK_ACK_TIMER)) {
-		pr_info("[DELACK HANDLER] No ACK_TIMER pending — exiting\n");
-		return;
-	}
-
-	// Timeout check logic was removed here by user. It's usually needed, but we respect your choice.
-	// If re-added, logs should explain whether we're waiting longer or sending now.
-
-	icsk->icsk_ack.pending &= ~ICSK_ACK_TIMER;
-
-	if (inet_csk_ack_scheduled(sk)) {
-		// Commented out logic for ATO adjustment/pingpong exit retained here for reference
-		// pr_info("[DELACK HANDLER] ACK scheduled — adjusting ATO or pingpong mode\n");
-		// ...
-
-		tcp_mstamp_refresh(tp);
-		tcp_send_ack(sk);
-		pr_info("[DELACK HANDLER] Delayed ACK sent immediately for socket: %p\n", sk);
-
-		__NET_INC_STATS(sock_net(sk), LINUX_MIB_DELAYEDACKS);
-		pr_info("[DELACK HANDLER] Delayed ACK stats incremented\n");
-	}
-
-	pr_info("[DELACK HANDLER] <-- Handler complete for socket: %p\n", sk);
-}
-
 void tcp_init_xmit_timers(struct sock *sk)
 {
-	inet_csk_init_xmit_timers(sk, &tcp_write_timer, &tcp_delack_hrtimer_callback,
+	inet_csk_init_xmit_timers(sk, &tcp_write_timer, &tcp_delack_hrtimer,
 				  &tcp_keepalive_timer);
 	hrtimer_init(&tcp_sk(sk)->pacing_timer, CLOCK_MONOTONIC,
 		     HRTIMER_MODE_ABS_PINNED_SOFT);

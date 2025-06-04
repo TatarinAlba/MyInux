@@ -837,14 +837,14 @@ static void tcp_event_data_recv(struct sock *sk, struct sk_buff *skb)
 
 	if (icsk->last_reset_time + 1000000ULL <= now) {
 		pr_info("[DATA RECV EVENT] 1 second elapsed — resetting iat_min\n");
-		icsk->iat_min = UINT64_MAX;
+		icsk->iat_min = U64_MAX;
 		icsk->last_reset_time = now;
 	}
 
 	unsigned long m = now - icsk->icsk_ack.lrcvtime;
 	pr_info("[DATA RECV EVENT] Inter-arrival time (IAT): %lu us\n", m);
 
-	if (m > 500) {
+	if (m > 200) {
 		pr_info("[DATA RECV EVENT] Valid IAT — updating iat_min if smaller\n");
 		icsk->iat_curr = m;
 		icsk->iat_min = min(m, icsk->iat_min);
@@ -858,11 +858,11 @@ static void tcp_event_data_recv(struct sock *sk, struct sk_buff *skb)
 
 		if (icsk->delayed_segs < 2) {
 			pr_info("[DATA RECV EVENT] Few delayed segments — setting fixed ATO = 500000 us\n");
-			icsk->ato = 500000;
+			icsk->icsk_ack.ato = 500000;
 		} else {
-			icsk->ato = div_u64((icsk->iat_min * 75 + icsk->iat_curr * 25) * 150, 10000);
-			icsk->ato = min(icsk->ato, 500000UL);
-			pr_info("[DATA RECV EVENT] Adjusted ATO based on IATs: %lu us\n", icsk->ato);
+			icsk->icsk_ack.ato = div_u64((icsk->iat_min * 75 + icsk->iat_curr * 25) * 150, 10000);
+			icsk->icsk_ack.ato = min(icsk->icsk_ack.ato, 500000UL);
+			pr_info("[DATA RECV EVENT] Adjusted ATO based on IATs: %lu us\n", icsk->icsk_ack.ato);
 		}
 	}
 
@@ -5850,7 +5850,8 @@ send_now:
 
 	/* === Delayed ACK Path === */
 	if (!ofo_possible || RB_EMPTY_ROOT(&tp->out_of_order_queue)) {
-		pr_info("[__TCP ACK CHECK] Sending delayed ACK (no out-of-order packets)\n");
+		pr_info("[__TCP ACK CHECK] Sending delayed ACK (no out-of-order packets: %d)\n", ++inet_csk(sk)->delayed_segs);
+		
 		tcp_send_delayed_ack(sk);
 		return;
 	}
