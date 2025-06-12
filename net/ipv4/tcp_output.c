@@ -4186,13 +4186,13 @@ void tcp_send_delayed_ack(struct sock *sk)
 	pr_info("[DELAYED ACK] Initial ATO: %d microsecs\n", ato);
 
 	/* Calculate new timeout */
-	timeout = ktime_get_ns() / 1000 + ato;
+	timeout = ktime_get_ns() / 1000ULL + ato;
 	pr_info("[DELAYED ACK] Scheduled ACK timeout: %lu (in %lu microsecs)\n", timeout, ato);
 
 	/* === Schedule the delayed ACK === */
 	icsk->icsk_ack.pending |= ICSK_ACK_SCHED | ICSK_ACK_TIMER;
 	icsk->icsk_ack.timeout = timeout;
-	hrtimer_start(&icsk->icsk_delack_timer, timeout * 1000, HRTIMER_MODE_ABS_PINNED_SOFT);
+	hrtimer_start(&icsk->icsk_delack_timer, timeout * 1000ULL, HRTIMER_MODE_ABS_PINNED_SOFT);
 	pr_info("[DELAYED ACK] Delayed ACK scheduled successfully — timeout set to: %lu\n", timeout);
 	pr_info("[DELAYED ACK] <-- Exiting tcp_send_delayed_ack()\n");
 }

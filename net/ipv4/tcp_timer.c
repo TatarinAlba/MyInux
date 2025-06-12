@@ -376,7 +376,7 @@ static enum hrtimer_restart tcp_delack_hrtimer(struct hrtimer *timer)
 
 	bh_lock_sock(sk);
 	if (!sock_owned_by_user(sk)) {
-		pr_info("[DELAYED CAL] CHEEEECCk");
+		pr_info("[DELAYED CALLBACK] Owned by a user, processing");
 		tcp_delack_timer_handler(sk);
 	} else {
 		__NET_INC_STATS(sock_net(sk), LINUX_MIB_DELAYEDACKLOCKED);
@@ -386,7 +386,7 @@ static enum hrtimer_restart tcp_delack_hrtimer(struct hrtimer *timer)
 	return HRTIMER_NORESTART;
 }
 
-
+// TODO: currently we've changed implementation, if you need, it's possibility to uncomment and restore the function
 /**
 //  *  tcp_delack_timer() - The TCP delayed ACK timeout handler
 //  *  @t:  Pointer to the timer. (gets casted to struct sock *)

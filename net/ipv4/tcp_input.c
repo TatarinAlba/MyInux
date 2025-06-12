@@ -833,37 +833,32 @@ static void tcp_event_data_recv(struct sock *sk, struct sk_buff *skb)
 	pr_info("[DATA RECV EVENT] RTT measurement updated (if sample available)\n");
 
 	/* === Timestamping and ATO/IAT Logic === */
-	now = ktime_get_ns() / 1000; // Convert to microseconds
+	now = ktime_get_ns() / 1000ULL; // Convert to microseconds
 
-	if (icsk->last_reset_time + 1000000ULL <= now) {
+	if (icsk->icsk_ack.last_reset_time + 1000000ULL <= now) {
 		pr_info("[DATA RECV EVENT] 1 second elapsed — resetting iat_min\n");
-		icsk->iat_min = U64_MAX;
-		icsk->last_reset_time = now;
+		icsk->icsk_ack.iat_min = U32_MAX;
+		icsk->icsk_ack.last_reset_time = now;
 	}
 
 	unsigned long m = now - icsk->icsk_ack.lrcvtime;
 	pr_info("[DATA RECV EVENT] Inter-arrival time (IAT): %lu us\n", m);
 
-	if (m > 200) {
+	// TODO: threshold for values that are less than 0.2ms (heuristics approach calc). You can substitute by const or var.
+	if (m > 200UL) {
 		pr_info("[DATA RECV EVENT] Valid IAT — updating iat_min if smaller\n");
-		icsk->iat_curr = m;
-		icsk->iat_min = min(m, icsk->iat_min);
-		pr_info("[DATA RECV EVENT] Updated iat_min: %lu us\n", icsk->iat_min);
+		icsk->icsk_ack.iat_curr = m;
+		icsk->icsk_ack.iat_min = min(m, icsk->icsk_ack.iat_min);
+		pr_info("[DATA RECV EVENT] Updated iat_min: %lu us\n", icsk->icsk_ack.iat_min);
 	}
 
-	/* === Non-Out-of-Order Detection & ATO Adjustment === */
-	if (TCP_SKB_CB(skb)->seq == tp->rcv_nxt) {
-		pr_info("[DATA RECV EVENT] Out-of-order packet detected: seq=%u, expected=%u\n",
-		        TCP_SKB_CB(skb)->seq, tp->rcv_nxt);
-
-		if (icsk->delayed_segs < 2) {
-			pr_info("[DATA RECV EVENT] Few delayed segments — setting fixed ATO = 500000 us\n");
-			icsk->icsk_ack.ato = 500000;
-		} else {
-			icsk->icsk_ack.ato = div_u64((icsk->iat_min * 75 + icsk->iat_curr * 25) * 150, 10000);
-			icsk->icsk_ack.ato = min(icsk->icsk_ack.ato, 500000UL);
-			pr_info("[DATA RECV EVENT] Adjusted ATO based on IATs: %lu us\n", icsk->icsk_ack.ato);
-		}
+	if (icsk->icsk_ack.delayed_segs < 2) {
+		pr_info("[DATA RECV EVENT] Few delayed segments — setting fixed ATO = 500000 us\n");
+		icsk->icsk_ack.ato = 500000UL; // TODO: could be moved to some constant as it is widely used in the program
+	} else {
+		icsk->icsk_ack.ato = div_u32((icsk->icsk_ack.iat_min * 75UL + icsk->icsk_ack.iat_curr * 25UL) * 150UL, 10000UL); // simplified formula obtained by Zakirov
+		icsk->icsk_ack.ato = min(icsk->icsk_ack.ato, 500000UL);
+		pr_info("[DATA RECV EVENT] Adjusted ATO based on IATs: %lu us\n", icsk->icsk_ack.ato);
 	}
 
 	/* === Final State Updates === */
@@ -5033,11 +5028,7 @@ static void tcp_data_queue_ofo(struct sock *sk, struct sk_buff *skb)
 	struct sk_buff *skb1;
 	u32 seq, end_seq;
 	bool fragstolen;
-	struct inet_connection_sock *icsk = inet_csk(sk);
-	icsk->delayed_segs = 0;
-	pr_info("[DATA QUEUE OFO] Null to delayed segs");
-
-	pr_info("[DATA QUEUE OFO] <-- Exit tcp_data_queue_ofo() for socket: %p\n", sk);
+	
 	tcp_save_lrcv_flowlabel(sk, skb);
 	tcp_ecn_check_ce(sk, skb);
 
