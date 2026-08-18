@@ -87,10 +87,10 @@ struct inet_connection_sock {
 	struct inet_bind2_bucket  *icsk_bind2_hash;
 	unsigned long		  icsk_timeout;
  	struct timer_list	  icsk_retransmit_timer;
- 	struct timer_list	  icsk_delack_timer;
+ 	struct hrtimer	  icsk_delack_timer;
 	__u32			  icsk_rto;
 	__u32                     icsk_rto_min;
-	__u32                     icsk_delack_max;
+	__u32                    icsk_delack_max;
 	__u32			  icsk_pmtu_cookie;
 	const struct tcp_congestion_ops *icsk_ca_ops;
 	const struct inet_connection_sock_af_ops *icsk_af_ops;
@@ -113,14 +113,19 @@ struct inet_connection_sock {
 		__u8		  quick;	 /* Scheduled number of quick acks	   */
 		__u8		  pingpong;	 /* The session is interactive		   */
 		__u8		  retry;	 /* Number of attempts			   */
-		#define ATO_BITS 8
-		__u32		  ato:ATO_BITS,	 /* Predicted tick of soft clock	   */
-				  lrcv_flowlabel:20, /* last received ipv6 flowlabel	   */
+		__u32		  ato;	 /* Predicted tick of soft clock	   */
+        __u32	  lrcv_flowlabel:28, /* last received ipv6 flowlabel	   */
 				  unused:4;
-		unsigned long	  timeout;	 /* Currently scheduled timeout		   */
+		unsigned long long timeout;	 /* Currently scheduled timeout	in microsecs */
 		__u32		  lrcvtime;	 /* timestamp of last received data packet */
 		__u16		  last_seg_size; /* Size of last incoming segment	   */
 		__u16		  rcv_mss;	 /* MSS used for delayed ACK decisions	   */
+		
+		/* Fields responsible for TCP-AAD algorithm */
+		__u32 iat_min; /* Minimum in the iat between packets for last-reset-time interval */
+		__u32 iat_curr; /* Current IAT for calculation of ATO */
+		__u16 delayed_segs /* Number of delayed segments during transmission */;
+		__u64 last_reset_time /* Last time when iat_min was reset */;
 	} icsk_ack;
 	struct {
 		/* Range of MTUs to search */
@@ -169,7 +174,7 @@ enum inet_csk_ack_state_t {
 
 void inet_csk_init_xmit_timers(struct sock *sk,
 			       void (*retransmit_handler)(struct timer_list *),
-			       void (*delack_handler)(struct timer_list *),
+			       enum  hrtimer_restart (*tcp_delack_hrtimer) (struct hrtimer *timer),
 			       void (*keepalive_handler)(struct timer_list *));
 void inet_csk_clear_xmit_timers(struct sock *sk);
 void inet_csk_clear_xmit_timers_sync(struct sock *sk);
@@ -205,7 +210,7 @@ static inline void inet_csk_clear_xmit_timer(struct sock *sk, const int what)
 		icsk->icsk_ack.pending = 0;
 		icsk->icsk_ack.retry = 0;
 #ifdef INET_CSK_CLEAR_TIMERS
-		sk_stop_timer(sk, &icsk->icsk_delack_timer);
+		hrtimer_cancel(&icsk->icsk_delack_timer);
 #endif
 	} else {
 		pr_debug("inet_csk BUG: unknown timer value\n");
@@ -234,8 +239,9 @@ static inline void inet_csk_reset_xmit_timer(struct sock *sk, const int what,
 		sk_reset_timer(sk, &icsk->icsk_retransmit_timer, icsk->icsk_timeout);
 	} else if (what == ICSK_TIME_DACK) {
 		icsk->icsk_ack.pending |= ICSK_ACK_TIMER;
-		icsk->icsk_ack.timeout = jiffies + when;
-		sk_reset_timer(sk, &icsk->icsk_delack_timer, icsk->icsk_ack.timeout);
+		/* Timeout in microseconds */
+		icsk->icsk_ack.timeout = ktime_get_ns() / 1000 + when;
+		hrtimer_start(&icsk->icsk_delack_timer, icsk->icsk_ack.timeout * 1000, HRTIMER_MODE_ABS_PINNED_SOFT);
 	} else {
 		pr_debug("inet_csk BUG: unknown timer value\n");
 	}

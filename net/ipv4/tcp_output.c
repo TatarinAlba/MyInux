@@ -4179,53 +4179,22 @@ u32 tcp_delack_max(const struct sock *sk)
 void tcp_send_delayed_ack(struct sock *sk)
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
-	int ato = icsk->icsk_ack.ato;
+	unsigned long ato = icsk->icsk_ack.ato;
 	unsigned long timeout;
 
-	if (ato > TCP_DELACK_MIN) {
-		const struct tcp_sock *tp = tcp_sk(sk);
-		int max_ato = HZ / 2;
+	pr_info("[DELAYED ACK] --> Entering tcp_send_delayed_ack() for socket: %p\n", sk);
+	pr_info("[DELAYED ACK] Initial ATO: %d microsecs\n", ato);
 
-		if (inet_csk_in_pingpong_mode(sk) ||
-		    (icsk->icsk_ack.pending & ICSK_ACK_PUSHED))
-			max_ato = TCP_DELACK_MAX;
+	/* Calculate new timeout */
+	timeout = ktime_get_ns() / 1000ULL + ato;
+	pr_info("[DELAYED ACK] Scheduled ACK timeout: %lu (in %lu microsecs)\n", timeout, ato);
 
-		/* Slow path, intersegment interval is "high". */
-
-		/* If some rtt estimate is known, use it to bound delayed ack.
-		 * Do not use inet_csk(sk)->icsk_rto here, use results of rtt measurements
-		 * directly.
-		 */
-		if (tp->srtt_us) {
-			int rtt = max_t(int, usecs_to_jiffies(tp->srtt_us >> 3),
-					TCP_DELACK_MIN);
-
-			if (rtt < max_ato)
-				max_ato = rtt;
-		}
-
-		ato = min(ato, max_ato);
-	}
-
-	ato = min_t(u32, ato, tcp_delack_max(sk));
-
-	/* Stay within the limit we were given */
-	timeout = jiffies + ato;
-
-	/* Use new timeout only if there wasn't a older one earlier. */
-	if (icsk->icsk_ack.pending & ICSK_ACK_TIMER) {
-		/* If delack timer is about to expire, send ACK now. */
-		if (time_before_eq(icsk->icsk_ack.timeout, jiffies + (ato >> 2))) {
-			tcp_send_ack(sk);
-			return;
-		}
-
-		if (!time_before(timeout, icsk->icsk_ack.timeout))
-			timeout = icsk->icsk_ack.timeout;
-	}
+	/* === Schedule the delayed ACK === */
 	icsk->icsk_ack.pending |= ICSK_ACK_SCHED | ICSK_ACK_TIMER;
 	icsk->icsk_ack.timeout = timeout;
-	sk_reset_timer(sk, &icsk->icsk_delack_timer, timeout);
+	hrtimer_start(&icsk->icsk_delack_timer, timeout * 1000ULL, HRTIMER_MODE_ABS_PINNED_SOFT);
+	pr_info("[DELAYED ACK] Delayed ACK scheduled successfully — timeout set to: %lu\n", timeout);
+	pr_info("[DELAYED ACK] <-- Exiting tcp_send_delayed_ack()\n");
 }
 
 /* This routine sends an ack and also updates the window. */

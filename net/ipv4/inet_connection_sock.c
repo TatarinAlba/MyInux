@@ -759,13 +759,14 @@ EXPORT_SYMBOL(inet_csk_accept);
  */
 void inet_csk_init_xmit_timers(struct sock *sk,
 			       void (*retransmit_handler)(struct timer_list *t),
-			       void (*delack_handler)(struct timer_list *t),
+			       enum  hrtimer_restart (*tcp_delack_hrtimer) (struct hrtimer *timer),
 			       void (*keepalive_handler)(struct timer_list *t))
 {
 	struct inet_connection_sock *icsk = inet_csk(sk);
 
 	timer_setup(&icsk->icsk_retransmit_timer, retransmit_handler, 0);
-	timer_setup(&icsk->icsk_delack_timer, delack_handler, 0);
+	hrtimer_init(&icsk->icsk_delack_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS_PINNED_SOFT);
+	icsk->icsk_delack_timer.function = tcp_delack_hrtimer;
 	timer_setup(&sk->sk_timer, keepalive_handler, 0);
 	icsk->icsk_pending = icsk->icsk_ack.pending = 0;
 }
@@ -778,7 +779,7 @@ void inet_csk_clear_xmit_timers(struct sock *sk)
 	icsk->icsk_pending = icsk->icsk_ack.pending = 0;
 
 	sk_stop_timer(sk, &icsk->icsk_retransmit_timer);
-	sk_stop_timer(sk, &icsk->icsk_delack_timer);
+	hrtimer_cancel(&icsk->icsk_delack_timer);
 	sk_stop_timer(sk, &sk->sk_timer);
 }
 EXPORT_SYMBOL(inet_csk_clear_xmit_timers);
@@ -793,7 +794,7 @@ void inet_csk_clear_xmit_timers_sync(struct sock *sk)
 	icsk->icsk_pending = icsk->icsk_ack.pending = 0;
 
 	sk_stop_timer_sync(sk, &icsk->icsk_retransmit_timer);
-	sk_stop_timer_sync(sk, &icsk->icsk_delack_timer);
+	hrtimer_cancel(&icsk->icsk_delack_timer);
 	sk_stop_timer_sync(sk, &sk->sk_timer);
 }
 

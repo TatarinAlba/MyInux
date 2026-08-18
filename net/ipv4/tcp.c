@@ -434,7 +434,7 @@ void tcp_init_sock(struct sock *sk)
 	icsk->icsk_rto = TCP_TIMEOUT_INIT;
 	rto_min_us = READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_rto_min_us);
 	icsk->icsk_rto_min = usecs_to_jiffies(rto_min_us);
-	icsk->icsk_delack_max = TCP_DELACK_MAX;
+	icsk->icsk_delack_max = 500000; // maximum bound of delayed ack in microsecs. TODO: for better usage you can change TCP_DELACK_MAX value
 	tp->mdev_us = jiffies_to_usecs(TCP_TIMEOUT_INIT);
 	minmax_reset(&tp->rtt_min, tcp_jiffies32, ~0U);
 
@@ -467,6 +467,11 @@ void tcp_init_sock(struct sock *sk)
 
 	icsk->icsk_sync_mss = tcp_sync_mss;
 
+	icsk->icsk_ack.iat_min = U32_MAX;
+	icsk->icsk_ack.delayed_segs = 0;
+	icsk->icsk_ack.iat_curr = U32_MAX;
+	icsk->icsk_ack.last_reset_time = 0;
+	
 	WRITE_ONCE(sk->sk_sndbuf, READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_wmem[1]));
 	WRITE_ONCE(sk->sk_rcvbuf, READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_rmem[1]));
 	tcp_scaling_ratio_init(sk);
@@ -3326,7 +3331,7 @@ int tcp_disconnect(struct sock *sk, int flags)
 	icsk->icsk_probes_tstamp = 0;
 	icsk->icsk_rto = TCP_TIMEOUT_INIT;
 	icsk->icsk_rto_min = TCP_RTO_MIN;
-	icsk->icsk_delack_max = TCP_DELACK_MAX;
+	icsk->icsk_delack_max = 500000;
 	tp->snd_ssthresh = TCP_INFINITE_SSTHRESH;
 	tcp_snd_cwnd_set(tp, TCP_INIT_CWND);
 	tp->snd_cwnd_cnt = 0;
